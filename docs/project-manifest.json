@@ -1,0 +1,25 @@
+{
+  "name": "Sky Mountain CompanyOS",
+  "version": "0.2.0",
+  "projects": [
+    "sky-mountain-cloud",
+    "plenty-of-plants",
+    "sky-mountain-graphics"
+  ],
+  "architecture": {
+    "frontend": "Next.js App Router",
+    "database": "PostgreSQL",
+    "automation": "planned: n8n",
+    "tooling": "planned: MCP",
+    "ai": ["OpenAI", "Anthropic", "local models"]
+  },
+  "integration_state": {
+    "gmail": "chat_connected",
+    "google_calendar": "chat_connected",
+    "github": "planned",
+    "proxmox": "local",
+    "nextcloud": "planned",
+    "firebase": "planned",
+    "n8n": "planned"
+  }
+}
