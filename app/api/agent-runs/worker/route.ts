@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 import { databaseAvailable, query, transaction } from "@/lib/db";
 import { loadAgentMemory } from "@/lib/ai/memory";
 import { recordAgentProposals } from "@/lib/ai/actions";
-import { buildTaskPrompt, getCodexCliStatus, runWithCodexCli, type AgentTask } from "@/lib/ai/router";
+import { buildTaskPrompt, getCodexCliStatus, type AgentTask } from "@/lib/ai/router";
+import { executeAgent } from "@/lib/ai/executor";
+import { providerRegistry } from "@/lib/ai/provider-registry";
+import { executeWithFallback, planDispatch } from "@/lib/ai/dispatch-plan";
 import { dispatchDueSalesFollowups } from "@/lib/workflows/sales-followups";
 import { processNextOutboundEmail } from "@/lib/workflows/outbound-email";
 
@@ -40,7 +43,9 @@ export async function POST(request: Request) {
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Sales reminder dispatch failed." }, { status: 500 });
   }
-  if (!codex.authenticated) return NextResponse.json({ error: codex.message, provider_status: codex, sales_reminders_created: salesRemindersCreated }, { status: 503 });
+  // Queued runs have no one to paste a response and must never reach billable APIs: Codex CLI first, then a local model.
+  const plan = planDispatch({ requested: "auto", automaticOnly: true, allowBillable: false, codexAuthenticated: codex.authenticated }, providerRegistry());
+  if (!plan.automatic.length) return NextResponse.json({ error: `${codex.message} Configure OLLAMA_MODEL to allow a local fallback.`, provider_status: codex, sales_reminders_created: salesRemindersCreated }, { status: 503 });
 
   try {
     const run = await transaction(async (client) => {
@@ -90,13 +95,13 @@ export async function POST(request: Request) {
     const prompt = buildTaskPrompt(task, memory);
     await query("UPDATE agent_runs SET input=input || $2::jsonb WHERE id=$1", [run.id, JSON.stringify({ prompt, task: { title: task.title, project: task.project_name, priority: task.priority }, memory })]);
     try {
-      const result = await runWithCodexCli(prompt);
+      const result = await executeWithFallback(plan.automatic, prompt, (candidate, text) => executeAgent({ provider: candidate, prompt: text }));
       const proposalCount = await transaction(async (client) => {
-        const finished = await client.query("UPDATE agent_runs SET model=$2,status='completed',summary=$3,result=$4::jsonb,completed_at=NOW() WHERE id=$1 AND status='running'", [run.id, result.model, result.text.slice(0, 500), JSON.stringify({ text: result.text })]);
+        const finished = await client.query("UPDATE agent_runs SET provider=$6,model=$2,status='completed',summary=$3,result=$4::jsonb,input=input || $5::jsonb,completed_at=NOW() WHERE id=$1 AND status='running'", [run.id, result.model, result.text.slice(0, 500), JSON.stringify({ text: result.text }), JSON.stringify({ routing: { automatic: plan.automatic, attempts: result.attempts, used: result.provider } }), result.provider]);
         if (!finished.rowCount) throw new Error("The delegated run is no longer active.");
         await client.query("UPDATE workflow_dispatches SET status='completed' WHERE agent_run_id=$1", [run.id]);
         const count = await recordAgentProposals(client, run.id, result.text);
-        await client.query("INSERT INTO events (source,event_type,title,severity,payload) VALUES ('agent-router','agent_run_completed',$1,'info',$2::jsonb)", [`Delegated task run completed: ${task.title}`, JSON.stringify({ run_id: run.id, task_id: task.id, provider: "codex-cli", approval_proposals: count })]);
+        await client.query("INSERT INTO events (source,event_type,title,severity,payload) VALUES ('agent-router','agent_run_completed',$1,'info',$2::jsonb)", [`Delegated task run completed: ${task.title}`, JSON.stringify({ run_id: run.id, task_id: task.id, provider: result.provider, fallback_attempts: result.attempts.length, approval_proposals: count })]);
         return count;
       });
       return NextResponse.json({ worked: true, run_id: run.id, status: "completed", approval_proposals: proposalCount });

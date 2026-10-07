@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Task } from "@/lib/types";
 
-type Provider = "openai" | "anthropic" | "ollama" | "chatgpt-free" | "claude-free" | "codex" | "codex-cli";
+type Provider = "auto" | "openai" | "anthropic" | "ollama" | "chatgpt-free" | "claude-free" | "codex" | "codex-cli";
 type AgentRun = {
   id: string;
   task_id: string;
@@ -25,6 +25,7 @@ type ProviderStatus = { installed: boolean; authenticated: boolean; message: str
 type AgentWorkerStatus = { status: string; details: { codex_cli_authenticated?: boolean }; last_seen_at: string; online: boolean };
 
 const providerLabels: Record<Provider, string> = {
+  auto: "Auto · best available, manual handoff if none",
   openai: "OpenAI API",
   anthropic: "Anthropic API",
   ollama: "Ollama local",
@@ -36,7 +37,7 @@ const providerLabels: Record<Provider, string> = {
 
 export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "database" | "demo" }) {
   const [taskId, setTaskId] = useState(tasks[0]?.id ?? "");
-  const [provider, setProvider] = useState<Provider>("chatgpt-free");
+  const [provider, setProvider] = useState<Provider>("auto");
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [runCounts, setRunCounts] = useState<RunCounts>({});
   const [configured, setConfigured] = useState<Partial<Record<Provider, boolean>>>({});
@@ -137,12 +138,14 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? "Task run failed.");
       if (body.status === "awaiting_external") {
+        const handoff = (body.provider ?? provider) as Provider;
         setPrompt(body.prompt);
         setActiveRunId(body.run_id);
-        setMessage(`Prompt prepared for ${providerLabels[provider]}. Copy it to that service, then submit its response below.`);
+        const fellBack = Array.isArray(body.attempts) && body.attempts.length > 0;
+        setMessage(`${fellBack ? "Automatic providers were unavailable or failed. " : ""}Prompt prepared for ${providerLabels[handoff] ?? handoff}. Copy it to that service, then submit its response below.`);
       } else {
         const proposalNotice = body.approval_proposals ? ` ${body.approval_proposals} follow-up task proposal(s) are waiting for owner approval on the dashboard.` : "";
-        setMessage(`Run completed with ${body.model}. The result is saved in CompanyOS.${proposalNotice}`);
+        setMessage(`Run completed with ${providerLabels[body.provider as Provider] ?? body.provider} (${body.model}). The result is saved in CompanyOS.${proposalNotice}`);
       }
       await refresh();
     } catch (error) {

@@ -12,7 +12,7 @@ try {
   const sql = await fs.readFile(new URL("../db/schema.sql", import.meta.url), "utf8");
   await client.query(sql);
   const requiredTables = ["companies", "projects", "agents", "tasks", "events", "financial_transactions", "agent_runs", "workflow_dispatches"];
-  const result = await client.query<{ table_name: string }>(
+  const result = await client.query(
     "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1::text[])",
     [requiredTables],
   );
