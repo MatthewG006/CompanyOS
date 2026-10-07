@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { delimiter, isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
+import { providerRegistry } from "./provider-registry";
 
 export const routedProviders = ["openai", "anthropic", "ollama"] as const;
 export const handoffProviders = ["chatgpt-free", "claude-free", "codex"] as const;
@@ -99,15 +100,7 @@ export async function getCodexCliStatus(): Promise<CodexCliStatus> {
 }
 
 export function configuredProviders() {
-  return {
-    openai: Boolean(process.env.OPENAI_API_KEY && process.env.AI_OPENAI_MODEL),
-    anthropic: Boolean(process.env.ANTHROPIC_API_KEY && process.env.AI_ANTHROPIC_MODEL),
-    ollama: Boolean(process.env.OLLAMA_MODEL),
-    "chatgpt-free": true,
-    "claude-free": true,
-    codex: true,
-    "codex-cli": false,
-  } satisfies Record<AgentProvider, boolean>;
+  return Object.fromEntries(providerRegistry().map((provider) => [provider.id, provider.isConfigured()])) as Record<AgentProvider, boolean>;
 }
 
 export function buildTaskPrompt(task: AgentTask, memory: AgentMemory = {}) {
