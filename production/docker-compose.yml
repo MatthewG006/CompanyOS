@@ -1,0 +1,125 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: companyos
+      POSTGRES_USER: companyos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
+    volumes:
+      - companyos-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U companyos -d companyos"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - companyos
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: production/Dockerfile
+    image: companyos:production
+    profiles: ["maintenance"]
+    command: ["node", "scripts/migrate.mjs"]
+    env_file:
+      - .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - companyos
+    restart: "no"
+
+  backup:
+    image: postgres:17-alpine
+    profiles: ["backup"]
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGDATABASE: companyos
+      PGUSER: companyos
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - companyos-backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          stamp=$$(date -u +%Y%m%dT%H%M%SZ)
+          if pg_dump --format=custom --no-owner --file="/backups/companyos-$$stamp.dump"; then
+            find /backups -type f -name 'companyos-*.dump' -mtime +"$$BACKUP_RETENTION_DAYS" -delete
+            echo "CompanyOS database backup completed: $$stamp"
+          else
+            echo "CompanyOS database backup failed" >&2
+          fi
+          sleep 86400
+        done
+    networks:
+      - companyos
+
+  app:
+    build:
+      context: ..
+      dockerfile: production/Dockerfile
+      args:
+        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.143.0}
+    image: companyos:production
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env.production, using postgres as the host}
+      CODEX_HOME: /home/nextjs/.codex
+    ports:
+      - "127.0.0.1:${COMPANYOS_HTTP_PORT:-3000}:3000"
+    volumes:
+      - companyos-codex-home:/home/nextjs/.codex
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - companyos
+
+  agent-worker:
+    image: companyos:production
+    profiles: ["agents"]
+    restart: unless-stopped
+    command: ["node", "scripts/agent-worker.mjs"]
+    env_file:
+      - .env.production
+    environment:
+      APP_URL: http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - companyos
+
+volumes:
+  companyos-postgres:
+  companyos-backups:
+  companyos-codex-home:
+
+networks:
+  companyos:
+    driver: bridge
