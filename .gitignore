@@ -1,5 +1,12 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
+npm-debug.log*
+*.log
+.DS_Store
+
+# CompanyOS production credentials
+production/.env.production
+production/.cloudflare-tunnel-token
 # dependencies
 /node_modules
 /.pnp
