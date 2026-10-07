@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: company-os-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: companyos
+      POSTGRES_USER: companyos
+      POSTGRES_PASSWORD: companyos_dev_password
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - company_os_postgres:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U companyos -d companyos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  company_os_postgres:
