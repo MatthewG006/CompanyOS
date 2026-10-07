@@ -13,7 +13,8 @@
     "db:reset": "docker compose down -v && docker compose up -d postgres && node scripts/migrate.mjs && node scripts/seed.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "agents:worker": "node scripts/agent-worker.mjs",
-    "format": "biome check --write ."
+    "format": "biome check --write .",
+    "db:doctor": "node scripts/db-doctor.mjs"
   },
   "dependencies": {
     "next": "16.3.8",
