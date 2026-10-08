@@ -49,3 +49,14 @@ To process runs continuously, start `npm run agents:worker` in a second terminal
 ## Owner-managed agent policy
 
 The AI Workforce screen lets the owner select each agent's enforced task-proposal permissions (`request_task_creation`, `request_task_status_change`, `request_task_delegation`, `request_sales_lead`, `request_email_outreach`, and `request_support_case_update`) and supported memory scopes (`project`, `tasks`, `systems`, `sales`, `support`). PII scopes and write proposals are restricted to their corresponding Sales or Support agent. Sales outreach proposals require the Sales agent, explicit contact memory, the outreach permission, and `COMPANYOS_POSTAL_ADDRESS`; they require approval of the exact email before delivery. See [sales outreach controls](sales-outreach.md). Support case changes require the Support agent, assigned-case memory, and approval. Updates are owner-authenticated in production, written to PostgreSQL, and recorded as Company Brain events. Delegation permission can only be assigned to agents with direct reports. Existing running prompts are not changed; policy applies when future task runs build their prompts.
+
+## Provider dispatch and fallback
+
+`POST /api/agent-runs` accepts `provider: "auto"` in addition to a specific provider. `lib/ai/dispatch-plan.ts` turns that choice into a plan, and `lib/ai/executor.ts` runs it:
+
+- **Auto (interactive):** try, in registry priority order, every configured automatic provider: Codex CLI (only when signed in), then Ollama. OpenAI and Anthropic API providers are billable and join auto-routing only when the server sets `AI_AUTO_ALLOW_BILLABLE=true`. If no automatic provider exists, or every attempt fails, the run becomes a manual handoff (`awaiting_external`) to ChatGPT Free by default. Send `manual_provider` (`chatgpt-free`, `claude-free`, or `codex`) to choose the service. The prompt is returned for the owner to copy, and the pasted response goes through the normal proposal and approval path.
+- **Explicit provider:** runs only that provider; there is no silent fallback to a different one. An unavailable provider returns HTTP 503.
+- **Queued/worker runs:** Codex CLI, then Ollama if `OLLAMA_MODEL` is set. Never billable APIs, never manual handoff. When neither is available the worker returns HTTP 503 and the run stays queued.
+- Failed attempts are stored in `agent_runs.input.routing.attempts`; the provider that produced the result replaces `agent_runs.provider`, and `routing.used` records it. Model output is still a draft: nothing executes without owner approval.
+
+Run the unit tests with `npm test`.

@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 import { databaseAvailable, query, transaction } from "@/lib/db";
 import { loadAgentMemory } from "@/lib/ai/memory";
 import { recordAgentProposals } from "@/lib/ai/actions";
-import { buildTaskPrompt, configuredProviders, getCodexCliStatus, handoffProviders, isAgentProvider, runWithCodexCli, runWithProvider, type AgentTask, type RoutedProvider } from "@/lib/ai/router";
+import { buildTaskPrompt, configuredProviders, getCodexCliStatus, handoffProviders, isAgentProvider, type AgentTask } from "@/lib/ai/router";
+import { executeAgent } from "@/lib/ai/executor";
+import { providerRegistry } from "@/lib/ai/provider-registry";
+import { DispatchError, executeWithFallback, planDispatch } from "@/lib/ai/dispatch-plan";
 
 export const dynamic = "force-dynamic";
 
@@ -127,10 +130,19 @@ export async function POST(request: Request) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(taskId)) {
       return NextResponse.json({ error: "A valid task_id is required." }, { status: 400 });
     }
-    if (!isAgentProvider(provider)) return NextResponse.json({ error: "Choose a supported provider." }, { status: 400 });
-    if (provider === "codex-cli") {
-      const codex = await getCodexCliStatus();
-      if (!codex.authenticated) return NextResponse.json({ error: codex.message, provider_status: codex }, { status: 503 });
+    if (provider !== "auto" && !isAgentProvider(provider)) return NextResponse.json({ error: "Choose a supported provider." }, { status: 400 });
+    const manualChoice = typeof body?.manual_provider === "string" && (handoffProviders as readonly string[]).includes(body.manual_provider) ? body.manual_provider : undefined;
+    const codex = await getCodexCliStatus();
+    const plan = planDispatch({
+      requested: provider,
+      automaticOnly: false,
+      allowBillable: process.env.AI_AUTO_ALLOW_BILLABLE === "true",
+      codexAuthenticated: codex.authenticated,
+      manualProvider: manualChoice,
+    }, providerRegistry());
+    if (!plan.automatic.length && !plan.manual) {
+      const message = provider === "codex-cli" ? codex.message : provider === "auto" ? "No AI provider is available. Install Codex CLI, configure a provider, or choose a manual handoff." : `${provider} is not configured on the CompanyOS server.`;
+      return NextResponse.json({ error: message, provider_status: { "codex-cli": codex } }, { status: 503 });
     }
     const taskResult = await query<AgentTask & { id: string; project_id: string | null; agent_id: string | null; status: string }>(`SELECT t.id,t.title,t.priority,t.status,t.project_id,p.name AS project_name,a.id AS agent_id,a.name AS agent_name,a.role AS agent_role,a.mission AS agent_mission,a.description AS agent_description,a.memory_scope AS agent_memory_scope,a.allowed_actions AS agent_allowed_actions,manager.name AS agent_manager_name,
         COALESCE((SELECT json_agg(json_build_object('id',child.id,'name',child.name,'role',child.role)) FROM agents child WHERE child.reports_to=a.id),'[]'::json) AS agent_direct_reports
@@ -141,35 +153,43 @@ export async function POST(request: Request) {
 
     const memory = await loadAgentMemory(task.project_id, task.agent_memory_scope, task.id);
     const prompt = buildTaskPrompt(task, memory);
-    const manual = (handoffProviders as readonly string[]).includes(provider);
-    const input = { prompt, task: { title: task.title, project: task.project_name, priority: task.priority }, memory };
-    const inserted = await query<{ id: string }>(`INSERT INTO agent_runs (agent_id,task_id,provider,model,status,summary,input,started_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,CASE WHEN $5='running' THEN NOW() ELSE NULL END) RETURNING id`, [
-      task.agent_id, task.id, provider, manual ? "manual handoff" : null, manual ? "awaiting_external" : "running", manual ? "Prompt ready for manual provider handoff." : "Model task started.", JSON.stringify(input),
-    ]);
-    const runId = inserted.rows[0].id;
+    const input = { prompt, task: { title: task.title, project: task.project_name, priority: task.priority }, memory, routing: { requested: provider, automatic: plan.automatic, manual: plan.manual } };
 
-    if (manual) {
-      await query("INSERT INTO events (source,event_type,title,severity,payload) VALUES ('agent-router','agent_run_queued',$1,'info',$2::jsonb)", [`Task handed off to ${provider}`, JSON.stringify({ run_id: runId, task_id: task.id })]);
-      return NextResponse.json({ ok: true, run_id: runId, status: "awaiting_external", prompt, provider });
+    async function startManualHandoff(runId: string | null, manualProvider: string, attempts: unknown[]) {
+      const routingInput = JSON.stringify({ routing: { ...input.routing, attempts } });
+      if (runId) {
+        await query("UPDATE agent_runs SET provider=$2,model='manual handoff',status='awaiting_external',summary='Prompt ready for manual provider handoff.',error=NULL,started_at=NULL,input=input || $3::jsonb WHERE id=$1", [runId, manualProvider, routingInput]);
+      } else {
+        const inserted = await query<{ id: string }>(`INSERT INTO agent_runs (agent_id,task_id,provider,model,status,summary,input)
+          VALUES ($1,$2,$3,'manual handoff','awaiting_external','Prompt ready for manual provider handoff.',$4::jsonb) RETURNING id`, [task.agent_id, task.id, manualProvider, JSON.stringify(input)]);
+        runId = inserted.rows[0].id;
+      }
+      await query("INSERT INTO events (source,event_type,title,severity,payload) VALUES ('agent-router','agent_run_queued',$1,'info',$2::jsonb)", [`Task handed off to ${manualProvider}`, JSON.stringify({ run_id: runId, task_id: task.id, attempts })]);
+      return NextResponse.json({ ok: true, run_id: runId, status: "awaiting_external", prompt, provider: manualProvider, attempts });
     }
 
+    if (!plan.automatic.length && plan.manual) return await startManualHandoff(null, plan.manual, []);
+
+    const inserted = await query<{ id: string }>(`INSERT INTO agent_runs (agent_id,task_id,provider,status,summary,input,started_at)
+      VALUES ($1,$2,$3,'running','Model task started.',$4::jsonb,NOW()) RETURNING id`, [task.agent_id, task.id, plan.automatic[0], JSON.stringify(input)]);
+    const runId = inserted.rows[0].id;
+
     try {
-      const result = provider === "codex-cli"
-        ? await runWithCodexCli(prompt)
-        : await runWithProvider(provider as RoutedProvider, prompt);
+      const result = await executeWithFallback(plan.automatic, prompt, (candidate, text) => executeAgent({ provider: candidate, prompt: text }));
       const proposalCount = await transaction(async (client) => {
-        await client.query("UPDATE agent_runs SET model=$2,status='completed',summary=$3,result=$4::jsonb,completed_at=NOW() WHERE id=$1", [runId, result.model, result.text.slice(0, 500), JSON.stringify({ text: result.text })]);
+        await client.query("UPDATE agent_runs SET provider=$2,model=$3,status='completed',summary=$4,result=$5::jsonb,input=input || $6::jsonb,completed_at=NOW() WHERE id=$1", [runId, result.provider, result.model, result.text.slice(0, 500), JSON.stringify({ text: result.text }), JSON.stringify({ routing: { ...input.routing, attempts: result.attempts, used: result.provider } })]);
         const count = await recordAgentProposals(client, runId, result.text);
-        await client.query("INSERT INTO events (source,event_type,title,severity,payload) VALUES ('agent-router','agent_run_completed',$1,'info',$2::jsonb)", [`Task run completed: ${task.title}`, JSON.stringify({ run_id: runId, task_id: task.id, provider, approval_proposals: count })]);
+        await client.query("INSERT INTO events (source,event_type,title,severity,payload) VALUES ('agent-router','agent_run_completed',$1,'info',$2::jsonb)", [`Task run completed: ${task.title}`, JSON.stringify({ run_id: runId, task_id: task.id, provider: result.provider, fallback_attempts: result.attempts.length, approval_proposals: count })]);
         return count;
       });
-      return NextResponse.json({ ok: true, run_id: runId, status: "completed", model: result.model, result: result.text, approval_proposals: proposalCount });
+      return NextResponse.json({ ok: true, run_id: runId, status: "completed", provider: result.provider, model: result.model, result: result.text, attempts: result.attempts, approval_proposals: proposalCount });
     } catch (error) {
+      const attempts = error instanceof DispatchError ? error.attempts : [];
+      if (plan.manual) return await startManualHandoff(runId, plan.manual, attempts);
       const detail = error instanceof Error ? error.message.slice(0, 400) : "Model execution failed.";
-      await query("UPDATE agent_runs SET status='failed',error=$2,summary='Model execution failed.',completed_at=NOW() WHERE id=$1", [runId, detail]);
+      await query("UPDATE agent_runs SET status='failed',error=$2,summary='Model execution failed.',input=input || $3::jsonb,completed_at=NOW() WHERE id=$1", [runId, detail, JSON.stringify({ routing: { ...input.routing, attempts } })]);
       await query("INSERT INTO events (source,event_type,title,severity,payload) VALUES ('agent-router','agent_run_failed',$1,'warning',$2::jsonb)", [`Task run failed: ${task.title}`, JSON.stringify({ run_id: runId, task_id: task.id, provider, error: detail })]);
-      return NextResponse.json({ error: detail, run_id: runId, status: "failed" }, { status: 502 });
+      return NextResponse.json({ error: detail, run_id: runId, status: "failed", attempts }, { status: 502 });
     }
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid agent-run request." }, { status: 400 });

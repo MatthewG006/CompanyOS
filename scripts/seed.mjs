@@ -1,4 +1,7 @@
+import { loadEnvConfig } from "@next/env";
 import pg from "pg";
+
+loadEnvConfig(process.cwd());
 
 const { Client } = pg;
 const connectionString = process.env.DATABASE_URL ?? "postgres://companyos:companyos_dev_password@localhost:5432/companyos";

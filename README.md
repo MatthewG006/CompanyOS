@@ -160,3 +160,9 @@ New screen: `/intelligence`. New API: `PATCH /api/attention`.
 
 For the private Proxmox deployment baseline, Docker Compose setup, required secrets, migrations, backup guidance, and remaining security boundaries, see [production/DEPLOYMENT.md](production/DEPLOYMENT.md).
 
+### AI Router and database safety
+
+CompanyOS now has a provider-independent AI task contract and provider registry. Tasks can describe required capabilities, data sensitivity, cost/duration constraints, preferred providers, and fallbacks. The registry distinguishes API, CLI, local, and manual-handoff execution instead of treating every provider as the same kind of worker.
+
+The database scripts load the same Next.js environment as the application. Run `npm run db:doctor` to verify that the active `DATABASE_URL` contains the required CompanyOS tables. If `financial_transactions` (or another required table) is missing, run `npm run db:migrate` against that same environment.
+
