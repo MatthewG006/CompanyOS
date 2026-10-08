@@ -32,7 +32,7 @@ To process runs continuously, start `npm run agents:worker` in a second terminal
 ## Run lifecycle
 
 - API-backed or Codex CLI run: `running` → `completed` or `failed`
-- Manual handoff: `awaiting_external` → `completed`
+- Manual handoff: `awaiting_external` → `completed`, or `expired` if no response is pasted in time (see below)
 - Approved delegation: task + `queued` run → `running` → `completed` or `failed`
 - New Gmail follow-up: task + `queued` run → `running` → `completed` or `failed`
 - Every run stores its bounded task input, selected provider/model, result or error, and timestamps in `agent_runs`.
@@ -73,3 +73,18 @@ Tasks now persist an execution contract in PostgreSQL:
 - `preferred_providers` / `fallback_providers`: bounded provider preferences used when automatic routing is selected
 
 The router evaluates these requirements before selecting a provider. Confidential tasks are limited to local execution or the isolated Codex CLI. A provider that lacks a required capability is never selected merely because it has a higher priority. Existing tasks default to reasoning plus internal data sensitivity, so this migration does not change their normal routing behavior.
+
+## Manual handoff expiry
+
+A manual handoff that never receives a pasted response would otherwise sit in `awaiting_external` forever. The agent worker endpoint marks any such run `expired` once it is older than `AGENT_HANDOFF_EXPIRY_HOURS` (default 48; whole hours from 1 to 720, invalid values use the default). Expiry records a `agent_run_expired` Company Brain event and stores an explanatory note in the run's `error` field. Because the paste-back endpoint only accepts `awaiting_external` runs, a late response is rejected; the owner starts a new run instead. Expiry runs whenever the worker polls (`npm run agents:worker` or **Run next queued task**), so an offline worker does not expire anything. The AI Workforce page shows an **Expired handoffs** count.
+
+## Database-backed tests
+
+`npm test` runs without a database; tests that need one are skipped. To run them, migrate a local PostgreSQL and set `DATABASE_URL`:
+
+```
+npm run db:migrate
+DATABASE_URL=postgres://companyos:companyos_dev_password@localhost:5432/companyos npm test
+```
+
+The database tests wrap their writes in a transaction that is rolled back, so they leave no rows behind.

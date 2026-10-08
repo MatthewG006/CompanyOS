@@ -6,6 +6,7 @@ import { buildTaskPrompt, getCodexCliStatus, type AgentTask } from "@/lib/ai/rou
 import { executeAgent } from "@/lib/ai/executor";
 import { providerRegistry } from "@/lib/ai/provider-registry";
 import { executeWithFallback, planDispatch } from "@/lib/ai/dispatch-plan";
+import { expireStaleHandoffs, handoffExpiryHours } from "@/lib/ai/handoff-expiry";
 import { normalizeProviderList, normalizeTaskCapabilities, normalizeTaskConstraints, type TaskSpec } from "@/lib/ai/task-spec";
 import { dispatchDueSalesFollowups } from "@/lib/workflows/sales-followups";
 import { processNextOutboundEmail } from "@/lib/workflows/outbound-email";
@@ -38,6 +39,12 @@ export async function POST(request: Request) {
       [workerInstanceId, codex.authenticated ? "online" : "degraded", JSON.stringify({ codex_cli_authenticated: codex.authenticated })],
     );
   }
+  let handoffsExpired = 0;
+  try {
+    handoffsExpired = await transaction((client) => expireStaleHandoffs(client, handoffExpiryHours(process.env.AGENT_HANDOFF_EXPIRY_HOURS)));
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Handoff expiry failed." }, { status: 500 });
+  }
   let salesRemindersCreated = 0;
   try {
     salesRemindersCreated = await dispatchDueSalesFollowups();
@@ -46,7 +53,7 @@ export async function POST(request: Request) {
   }
   // Queued runs have no one to paste a response and must never reach billable APIs: Codex CLI first, then a local model.
   const plan = planDispatch({ requested: "auto", automaticOnly: true, allowBillable: false, codexAuthenticated: codex.authenticated }, providerRegistry());
-  if (!plan.automatic.length) return NextResponse.json({ error: `${codex.message} Configure OLLAMA_MODEL to allow a local fallback.`, provider_status: codex, sales_reminders_created: salesRemindersCreated }, { status: 503 });
+  if (!plan.automatic.length) return NextResponse.json({ error: `${codex.message} Configure OLLAMA_MODEL to allow a local fallback.`, provider_status: codex, sales_reminders_created: salesRemindersCreated, handoffs_expired: handoffsExpired }, { status: 503 });
 
   try {
     const run = await transaction(async (client) => {
@@ -68,7 +75,7 @@ export async function POST(request: Request) {
       if (claimed) await client.query("UPDATE workflow_dispatches SET status='running' WHERE agent_run_id=$1", [claimed.id]);
       return claimed;
     });
-    if (!run) return NextResponse.json({ worked: false, status: "idle", sales_reminders_created: salesRemindersCreated });
+    if (!run) return NextResponse.json({ worked: false, status: "idle", sales_reminders_created: salesRemindersCreated, handoffs_expired: handoffsExpired });
 
     const taskResult = await query<AgentTask & {
       id: string;

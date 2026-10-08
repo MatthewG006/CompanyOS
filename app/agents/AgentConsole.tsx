@@ -20,7 +20,7 @@ type AgentRun = {
   retry_run_id: string | null;
   retry_status: string | null;
 };
-type RunCounts = { queued?: number; running?: number; completed?: number; failed?: number; awaiting_external?: number };
+type RunCounts = { queued?: number; running?: number; completed?: number; failed?: number; awaiting_external?: number; expired?: number };
 type ProviderStatus = { installed: boolean; authenticated: boolean; message: string };
 type AgentWorkerStatus = { status: string; details: { codex_cli_authenticated?: boolean }; last_seen_at: string; online: boolean };
 
@@ -216,6 +216,7 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
         <div><span>Completed</span><strong>{runCounts.completed ?? 0}</strong></div>
         <div><span>Failed</span><strong>{runCounts.failed ?? 0}</strong></div>
         <div><span>Awaiting handoff</span><strong>{runCounts.awaiting_external ?? 0}</strong></div>
+        <div><span>Expired handoffs</span><strong>{runCounts.expired ?? 0}</strong></div>
       </section>
       {queueMessage ? <p className="inline-message" role="status">{queueMessage}</p> : null}
       <div className="subsection-title">Recent runs</div>
