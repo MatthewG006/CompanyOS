@@ -60,3 +60,16 @@ The AI Workforce screen lets the owner select each agent's enforced task-proposa
 - Failed attempts are stored in `agent_runs.input.routing.attempts`; the provider that produced the result replaces `agent_runs.provider`, and `routing.used` records it. Model output is still a draft: nothing executes without owner approval.
 
 Run the unit tests with `npm test`.
+
+
+## Task execution requirements
+
+Tasks now persist an execution contract in PostgreSQL:
+
+- `capabilities`: model capabilities such as `reasoning`, `coding`, `web`, `filesystem`, and `shell`
+- `constraints.dataSensitivity`: `public`, `internal`, or `confidential`
+- `constraints.maxCostCents`: a zero value excludes billable API providers
+- `constraints.maxDurationMs`: providers whose declared execution ceiling exceeds the task limit are excluded
+- `preferred_providers` / `fallback_providers`: bounded provider preferences used when automatic routing is selected
+
+The router evaluates these requirements before selecting a provider. Confidential tasks are limited to local execution or the isolated Codex CLI. A provider that lacks a required capability is never selected merely because it has a higher priority. Existing tasks default to reasoning plus internal data sensitivity, so this migration does not change their normal routing behavior.
