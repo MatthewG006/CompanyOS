@@ -1,5 +1,5 @@
 import type { ProviderDefinition, ProviderId } from "./provider-registry";
-import { providerSupportsTask } from "./provider-registry";
+import { providerSupportsTask } from "./provider-registry.ts";
 import type { TaskSpec } from "./task-spec";
 
 /** Providers that bill the owner's API account per request. */
