@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { databaseAvailable, query } from "@/lib/db";
 import { getDashboardData } from "@/lib/data";
+import { normalizeProviderList, normalizeTaskCapabilities, normalizeTaskConstraints } from "@/lib/ai/task-spec";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,10 @@ export async function POST(request: Request) {
     const priority = ["critical", "high", "normal", "low"].includes(body?.priority) ? body.priority : "normal";
     const projectSlug = typeof body?.project_slug === "string" ? body.project_slug.trim() : null;
     const agentName = typeof body?.agent_name === "string" ? body.agent_name.trim() : null;
+    const capabilities = normalizeTaskCapabilities(body?.capabilities);
+    const constraints = normalizeTaskConstraints(body?.constraints);
+    const preferredProviders = normalizeProviderList(body?.preferred_providers);
+    const fallbackProviders = normalizeProviderList(body?.fallback_providers);
 
     if (!title) return NextResponse.json({ error: "title is required." }, { status: 400 });
 
@@ -34,15 +39,24 @@ export async function POST(request: Request) {
     if (agentName && !agentResult.rowCount) return NextResponse.json({ error: `Agent not found: ${agentName}` }, { status: 404 });
 
     const inserted = await query<{ id: string }>(
-      `INSERT INTO tasks (project_id, agent_id, title, priority, status)
-       VALUES ($1,$2,$3,$4,'todo') RETURNING id`,
-      [projectResult.rows[0]?.id ?? null, agentResult.rows[0]?.id ?? null, title, priority],
+      `INSERT INTO tasks (project_id, agent_id, title, priority, status, capabilities, constraints, preferred_providers, fallback_providers)
+       VALUES ($1,$2,$3,$4,'todo',$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb) RETURNING id`,
+      [
+        projectResult.rows[0]?.id ?? null,
+        agentResult.rows[0]?.id ?? null,
+        title,
+        priority,
+        JSON.stringify(capabilities),
+        JSON.stringify(constraints),
+        JSON.stringify(preferredProviders),
+        JSON.stringify(fallbackProviders),
+      ],
     );
 
     await query(
       `INSERT INTO events (project_id, source, event_type, title, severity, payload)
        VALUES ($1, 'command-center', 'task_created', $2, 'info', $3::jsonb)`,
-      [projectResult.rows[0]?.id ?? null, `Task created: ${title}`, JSON.stringify({ task_id: inserted.rows[0].id, priority })],
+      [projectResult.rows[0]?.id ?? null, `Task created: ${title}`, JSON.stringify({ task_id: inserted.rows[0].id, priority, capabilities, constraints, preferred_providers: preferredProviders, fallback_providers: fallbackProviders })],
     );
 
     return NextResponse.json({ ok: true, task_id: inserted.rows[0].id });

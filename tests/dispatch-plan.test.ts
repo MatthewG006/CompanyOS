@@ -3,8 +3,8 @@ import { test } from "node:test";
 import { DispatchError, executeWithFallback, planDispatch, type DispatchPolicy } from "../lib/ai/dispatch-plan.ts";
 import type { ProviderDefinition, ProviderId } from "../lib/ai/provider-registry.ts";
 
-const def = (id: ProviderId, mode: ProviderDefinition["mode"], priority: number, configured = true): ProviderDefinition => ({
-  id, mode, priority, capabilities: { reasoning: true }, isConfigured: () => configured,
+const def = (id: ProviderId, mode: ProviderDefinition["mode"], priority: number, configured = true, capabilities: ProviderDefinition["capabilities"] = { reasoning: true }): ProviderDefinition => ({
+  id, mode, priority, capabilities, isConfigured: () => configured, maxDurationMs: mode === "cli" ? 120_000 : mode === "manual_handoff" ? 0 : 60_000,
 });
 const providers = [
   def("codex-cli", "cli", 100), def("openai", "api", 80), def("anthropic", "api", 75, false), def("ollama", "local", 70),
@@ -50,4 +50,44 @@ test("executeWithFallback throws a DispatchError listing every failure", async (
     (error: unknown) => error instanceof DispatchError && error.attempts.length === 2 && /ollama down/.test(error.message),
   );
   await assert.rejects(executeWithFallback([], "p", async () => ({ model: "m", text: "t" })), /No automatic AI provider/);
+});
+
+test("task requirements filter providers by capability and sensitivity", () => {
+  const task = {
+    taskId: "task",
+    agentId: "agent",
+    objective: "inspect infrastructure",
+    capabilities: { coding: true, shell: true },
+    constraints: { dataSensitivity: "confidential" as const },
+    context: { memoryScopes: ["project"] },
+    execution: { preferredProviders: ["codex-cli"], fallbackProviders: ["ollama"] },
+  };
+  assert.deepEqual(planDispatch(base, providers, task).automatic, ["codex-cli"]);
+  assert.deepEqual(planDispatch({ ...base, codexAuthenticated: false }, providers, task).automatic, []);
+});
+
+test("task duration constraints reject providers whose execution ceiling is too long", () => {
+  const task = {
+    taskId: "task",
+    agentId: "agent",
+    objective: "fast task",
+    capabilities: { reasoning: true },
+    constraints: { maxDurationMs: 30_000 },
+    context: { memoryScopes: [] },
+    execution: {},
+  };
+  assert.deepEqual(planDispatch(base, providers, task).automatic, []);
+});
+
+test("task provider preferences influence automatic ordering", () => {
+  const task = {
+    taskId: "task",
+    agentId: "agent",
+    objective: "code",
+    capabilities: { coding: true },
+    constraints: {},
+    context: { memoryScopes: [] },
+    execution: { preferredProviders: ["ollama"] },
+  };
+  assert.equal(planDispatch({ ...base, codexAuthenticated: false }, providers, task).automatic[0], "ollama");
 });

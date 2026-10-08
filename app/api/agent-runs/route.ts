@@ -6,6 +6,7 @@ import { buildTaskPrompt, configuredProviders, getCodexCliStatus, handoffProvide
 import { executeAgent } from "@/lib/ai/executor";
 import { providerRegistry } from "@/lib/ai/provider-registry";
 import { DispatchError, executeWithFallback, planDispatch } from "@/lib/ai/dispatch-plan";
+import { normalizeProviderList, normalizeTaskCapabilities, normalizeTaskConstraints, type TaskSpec } from "@/lib/ai/task-spec";
 
 export const dynamic = "force-dynamic";
 
@@ -131,6 +132,37 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "A valid task_id is required." }, { status: 400 });
     }
     if (provider !== "auto" && !isAgentProvider(provider)) return NextResponse.json({ error: "Choose a supported provider." }, { status: 400 });
+    const taskResult = await query<AgentTask & {
+      id: string;
+      project_id: string | null;
+      agent_id: string | null;
+      status: string;
+      capabilities: unknown;
+      constraints: unknown;
+      preferred_providers: unknown;
+      fallback_providers: unknown;
+    }>(`SELECT t.id,t.title,t.priority,t.status,t.project_id,t.capabilities,t.constraints,t.preferred_providers,t.fallback_providers,
+        p.name AS project_name,a.id AS agent_id,a.name AS agent_name,a.role AS agent_role,a.mission AS agent_mission,
+        a.description AS agent_description,a.memory_scope AS agent_memory_scope,a.allowed_actions AS agent_allowed_actions,
+        manager.name AS agent_manager_name,
+        COALESCE((SELECT json_agg(json_build_object('id',child.id,'name',child.name,'role',child.role)) FROM agents child WHERE child.reports_to=a.id),'[]'::json) AS agent_direct_reports
+      FROM tasks t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN agents a ON a.id=t.agent_id
+      LEFT JOIN agents manager ON manager.id=a.reports_to WHERE t.id=$1`, [taskId]);
+    const task = taskResult.rows[0];
+    if (!task || task.status === "done") return NextResponse.json({ error: "Open task not found." }, { status: 404 });
+
+    const taskSpec: TaskSpec = {
+      taskId: task.id,
+      agentId: task.agent_id ?? "",
+      objective: task.title,
+      capabilities: normalizeTaskCapabilities(task.capabilities),
+      constraints: normalizeTaskConstraints(task.constraints),
+      context: { projectId: task.project_id ?? undefined, memoryScopes: Array.isArray(task.agent_memory_scope) ? task.agent_memory_scope : [] },
+      execution: {
+        preferredProviders: normalizeProviderList(task.preferred_providers),
+        fallbackProviders: normalizeProviderList(task.fallback_providers),
+      },
+    };
     const manualChoice = typeof body?.manual_provider === "string" && (handoffProviders as readonly string[]).includes(body.manual_provider) ? body.manual_provider : undefined;
     const codex = await getCodexCliStatus();
     const plan = planDispatch({
@@ -139,21 +171,25 @@ export async function POST(request: Request) {
       allowBillable: process.env.AI_AUTO_ALLOW_BILLABLE === "true",
       codexAuthenticated: codex.authenticated,
       manualProvider: manualChoice,
-    }, providerRegistry());
+    }, providerRegistry(), taskSpec);
     if (!plan.automatic.length && !plan.manual) {
-      const message = provider === "codex-cli" ? codex.message : provider === "auto" ? "No AI provider is available. Install Codex CLI, configure a provider, or choose a manual handoff." : `${provider} is not configured on the CompanyOS server.`;
-      return NextResponse.json({ error: message, provider_status: { "codex-cli": codex } }, { status: 503 });
+      const message = provider === "codex-cli"
+        ? (codex.authenticated ? "Codex CLI does not satisfy this task's execution requirements." : codex.message)
+        : provider === "auto"
+          ? "No configured AI provider satisfies this task's capabilities, sensitivity, cost, and duration constraints."
+          : `${provider} is unavailable or does not satisfy this task's execution requirements.`;
+      return NextResponse.json({ error: message, provider_status: { "codex-cli": codex }, task_requirements: taskSpec }, { status: 503 });
     }
-    const taskResult = await query<AgentTask & { id: string; project_id: string | null; agent_id: string | null; status: string }>(`SELECT t.id,t.title,t.priority,t.status,t.project_id,p.name AS project_name,a.id AS agent_id,a.name AS agent_name,a.role AS agent_role,a.mission AS agent_mission,a.description AS agent_description,a.memory_scope AS agent_memory_scope,a.allowed_actions AS agent_allowed_actions,manager.name AS agent_manager_name,
-        COALESCE((SELECT json_agg(json_build_object('id',child.id,'name',child.name,'role',child.role)) FROM agents child WHERE child.reports_to=a.id),'[]'::json) AS agent_direct_reports
-      FROM tasks t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN agents a ON a.id=t.agent_id
-      LEFT JOIN agents manager ON manager.id=a.reports_to WHERE t.id=$1`, [taskId]);
-    const task = taskResult.rows[0];
-    if (!task || task.status === "done") return NextResponse.json({ error: "Open task not found." }, { status: 404 });
 
     const memory = await loadAgentMemory(task.project_id, task.agent_memory_scope, task.id);
     const prompt = buildTaskPrompt(task, memory);
-    const input = { prompt, task: { title: task.title, project: task.project_name, priority: task.priority }, memory, routing: { requested: provider, automatic: plan.automatic, manual: plan.manual } };
+    const input = {
+      prompt,
+      task: { title: task.title, project: task.project_name, priority: task.priority },
+      memory,
+      requirements: taskSpec,
+      routing: { requested: provider, automatic: plan.automatic, manual: plan.manual },
+    };
 
     async function startManualHandoff(runId: string | null, manualProvider: string, attempts: unknown[]) {
       const routingInput = JSON.stringify({ routing: { ...input.routing, attempts } });
