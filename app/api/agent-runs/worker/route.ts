@@ -6,6 +6,7 @@ import { buildTaskPrompt, getCodexCliStatus, type AgentTask } from "@/lib/ai/rou
 import { executeAgent } from "@/lib/ai/executor";
 import { providerRegistry } from "@/lib/ai/provider-registry";
 import { executeWithFallback, planDispatch } from "@/lib/ai/dispatch-plan";
+import { normalizeProviderList, normalizeTaskCapabilities, normalizeTaskConstraints, type TaskSpec } from "@/lib/ai/task-spec";
 import { dispatchDueSalesFollowups } from "@/lib/workflows/sales-followups";
 import { processNextOutboundEmail } from "@/lib/workflows/outbound-email";
 
@@ -69,8 +70,19 @@ export async function POST(request: Request) {
     });
     if (!run) return NextResponse.json({ worked: false, status: "idle", sales_reminders_created: salesRemindersCreated });
 
-    const taskResult = await query<AgentTask & { id: string; project_id: string | null; agent_id: string | null; status: string }>(
-      `SELECT t.id,t.title,t.priority,t.status,t.project_id,p.name AS project_name,a.id AS agent_id,a.name AS agent_name,a.role AS agent_role,a.mission AS agent_mission,a.description AS agent_description,a.memory_scope AS agent_memory_scope,a.allowed_actions AS agent_allowed_actions,manager.name AS agent_manager_name,
+    const taskResult = await query<AgentTask & {
+      id: string;
+      project_id: string | null;
+      agent_id: string | null;
+      status: string;
+      capabilities: unknown;
+      constraints: unknown;
+      preferred_providers: unknown;
+      fallback_providers: unknown;
+    }>(
+      `SELECT t.id,t.title,t.priority,t.status,t.project_id,t.capabilities,t.constraints,t.preferred_providers,t.fallback_providers,
+         p.name AS project_name,a.id AS agent_id,a.name AS agent_name,a.role AS agent_role,a.mission AS agent_mission,
+         a.description AS agent_description,a.memory_scope AS agent_memory_scope,a.allowed_actions AS agent_allowed_actions,manager.name AS agent_manager_name,
          COALESCE((SELECT json_agg(json_build_object('id',child.id,'name',child.name,'role',child.role)) FROM agents child WHERE child.reports_to=a.id),'[]'::json) AS agent_direct_reports
        FROM tasks t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN agents a ON a.id=t.agent_id
        LEFT JOIN agents manager ON manager.id=a.reports_to WHERE t.id=$1`, [run.task_id],
@@ -84,6 +96,31 @@ export async function POST(request: Request) {
       return NextResponse.json({ worked: true, run_id: run.id, status: "failed" });
     }
 
+    const taskSpec: TaskSpec = {
+      taskId: task.id,
+      agentId: task.agent_id,
+      objective: task.title,
+      capabilities: normalizeTaskCapabilities(task.capabilities),
+      constraints: normalizeTaskConstraints(task.constraints),
+      context: { projectId: task.project_id ?? undefined, memoryScopes: Array.isArray(task.agent_memory_scope) ? task.agent_memory_scope : [] },
+      execution: {
+        preferredProviders: normalizeProviderList(task.preferred_providers),
+        fallbackProviders: normalizeProviderList(task.fallback_providers),
+      },
+    };
+    const workerPlan = planDispatch(
+      { requested: "auto", automaticOnly: true, allowBillable: false, codexAuthenticated: codex.authenticated },
+      providerRegistry(),
+      taskSpec,
+    );
+    if (!workerPlan.automatic.length) {
+      await transaction(async (client) => {
+        await client.query(`UPDATE agent_runs SET status='failed',error='No automatic provider satisfies the task execution requirements.',summary='Task requirements cannot be executed by the worker.',completed_at=NOW() WHERE id=$1 AND status='running'`, [run.id]);
+        await client.query("UPDATE workflow_dispatches SET status='failed' WHERE agent_run_id=$1", [run.id]);
+      });
+      return NextResponse.json({ worked: true, run_id: run.id, status: "failed", task_requirements: taskSpec });
+    }
+
     const baseMemory = await loadAgentMemory(task.project_id, task.agent_memory_scope, task.id);
     const workflowContext = run.input?.workflow_context;
     const retryContext = run.input?.retry_context;
@@ -95,9 +132,9 @@ export async function POST(request: Request) {
     const prompt = buildTaskPrompt(task, memory);
     await query("UPDATE agent_runs SET input=input || $2::jsonb WHERE id=$1", [run.id, JSON.stringify({ prompt, task: { title: task.title, project: task.project_name, priority: task.priority }, memory })]);
     try {
-      const result = await executeWithFallback(plan.automatic, prompt, (candidate, text) => executeAgent({ provider: candidate, prompt: text }));
+      const result = await executeWithFallback(workerPlan.automatic, prompt, (candidate, text) => executeAgent({ provider: candidate, prompt: text }));
       const proposalCount = await transaction(async (client) => {
-        const finished = await client.query("UPDATE agent_runs SET provider=$6,model=$2,status='completed',summary=$3,result=$4::jsonb,input=input || $5::jsonb,completed_at=NOW() WHERE id=$1 AND status='running'", [run.id, result.model, result.text.slice(0, 500), JSON.stringify({ text: result.text }), JSON.stringify({ routing: { automatic: plan.automatic, attempts: result.attempts, used: result.provider } }), result.provider]);
+        const finished = await client.query("UPDATE agent_runs SET provider=$6,model=$2,status='completed',summary=$3,result=$4::jsonb,input=input || $5::jsonb,completed_at=NOW() WHERE id=$1 AND status='running'", [run.id, result.model, result.text.slice(0, 500), JSON.stringify({ text: result.text }), JSON.stringify({ requirements: taskSpec, routing: { automatic: workerPlan.automatic, attempts: result.attempts, used: result.provider } }), result.provider]);
         if (!finished.rowCount) throw new Error("The delegated run is no longer active.");
         await client.query("UPDATE workflow_dispatches SET status='completed' WHERE agent_run_id=$1", [run.id]);
         const count = await recordAgentProposals(client, run.id, result.text);

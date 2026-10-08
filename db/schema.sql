@@ -88,6 +88,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS capabilities JSONB NOT NULL DEFAULT '{"reasoning":true}'::jsonb;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS constraints JSONB NOT NULL DEFAULT '{"dataSensitivity":"internal"}'::jsonb;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS preferred_providers JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS fallback_providers JSONB NOT NULL DEFAULT '[]'::jsonb;
+
 
 CREATE TABLE IF NOT EXISTS events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
