@@ -1,25 +1,20 @@
 import type { ProviderDefinition, ProviderId } from "./provider-registry";
+import { providerSupportsTask } from "./provider-registry";
+import type { TaskSpec } from "./task-spec";
 
 /** Providers that bill the owner's API account per request. */
 export const BILLABLE_PROVIDERS: readonly ProviderId[] = ["openai", "anthropic"];
 
 export type DispatchPolicy = {
-  /** A specific provider chosen by the owner, or "auto" to let CompanyOS pick. */
   requested: ProviderId | "auto";
-  /** Queue/worker runs have nobody to paste a response, so manual handoff is never a fallback. */
   automaticOnly: boolean;
-  /** Billable API providers join automatic routing only when the owner opts in. */
   allowBillable: boolean;
-  /** Codex CLI is registered as always configured; its real sign-in state is checked at runtime. */
   codexAuthenticated: boolean;
-  /** Which consumer chat service receives the prompt when no automatic provider can run. */
   manualProvider?: ProviderId;
 };
 
 export type DispatchPlan = {
-  /** Providers CompanyOS can execute itself, in the order they will be tried. */
   automatic: ProviderId[];
-  /** Provider the owner pastes a response from when nothing automatic ran; null if not allowed. */
   manual: ProviderId | null;
 };
 
@@ -40,14 +35,24 @@ function usable(provider: ProviderDefinition, policy: DispatchPolicy) {
   return true;
 }
 
-export function planDispatch(policy: DispatchPolicy, providers: ProviderDefinition[]): DispatchPlan {
-  const byPriority = [...providers].sort((a, b) => b.priority - a.priority);
+export function planDispatch(policy: DispatchPolicy, providers: ProviderDefinition[], task?: TaskSpec): DispatchPlan {
+  const byPriority = [...providers]
+    .filter((provider) => !task || providerSupportsTask(provider, task))
+    .sort((a, b) => {
+      if (!task) return b.priority - a.priority;
+      const preferred = task.execution.preferredProviders ?? [];
+      const fallback = task.execution.fallbackProviders ?? [];
+      const aIndex = [...preferred, ...fallback].indexOf(a.id);
+      const bIndex = [...preferred, ...fallback].indexOf(b.id);
+      const aScore = aIndex === -1 ? 0 : 1000 - aIndex * 10;
+      const bScore = bIndex === -1 ? 0 : 1000 - bIndex * 10;
+      return (bScore + b.priority) - (aScore + a.priority);
+    });
   const manualProviders = byPriority.filter((provider) => provider.mode === "manual_handoff");
 
   if (policy.requested !== "auto") {
     const chosen = providers.find((provider) => provider.id === policy.requested);
-    if (!chosen) return { automatic: [], manual: null };
-    // An explicit choice never silently falls back to a different provider.
+    if (!chosen || (task && !providerSupportsTask(chosen, task))) return { automatic: [], manual: null };
     if (chosen.mode === "manual_handoff") return { automatic: [], manual: policy.automaticOnly ? null : chosen.id };
     return { automatic: usable(chosen, policy) ? [chosen.id] : [], manual: null };
   }
@@ -68,7 +73,6 @@ export function planDispatch(policy: DispatchPolicy, providers: ProviderDefiniti
 
 export type DispatchRunner<T extends { model: string; text: string }> = (provider: ProviderId, prompt: string) => Promise<T>;
 
-/** Tries each automatic provider in order and records why earlier ones failed. */
 export async function executeWithFallback<T extends { model: string; text: string }>(
   automatic: ProviderId[],
   prompt: string,
