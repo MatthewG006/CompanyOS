@@ -40,6 +40,7 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
   const [provider, setProvider] = useState<Provider>("auto");
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [runCounts, setRunCounts] = useState<RunCounts>({});
+  const [localCap, setLocalCap] = useState<{ limit: number; used: number; capped: boolean } | null>(null);
   const [configured, setConfigured] = useState<Partial<Record<Provider, boolean>>>({});
   const [codexStatus, setCodexStatus] = useState<ProviderStatus | null>(null);
   const [workerStatus, setWorkerStatus] = useState<AgentWorkerStatus | null>(null);
@@ -67,6 +68,7 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
     if (!response.ok) throw new Error(body.error ?? "Could not load agent runs.");
     setAuthRequired(Boolean(body.auth_required));
     setConfigured(body.providers ?? {});
+    setLocalCap(body.local_cap ?? null);
     setCodexStatus(body.provider_status?.["codex-cli"] ?? null);
     setWorkerStatus(body.agent_worker ?? null);
     setRuns(body.runs ?? []);
@@ -217,6 +219,7 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
         <div><span>Failed</span><strong>{runCounts.failed ?? 0}</strong></div>
         <div><span>Awaiting handoff</span><strong>{runCounts.awaiting_external ?? 0}</strong></div>
         <div><span>Expired handoffs</span><strong>{runCounts.expired ?? 0}</strong></div>
+        {configured.ollama && localCap && localCap.limit > 0 ? <div><span>Local runs (1h)</span><strong>{localCap.used}/{localCap.limit}{localCap.capped ? " · paused" : ""}</strong></div> : null}
       </section>
       {queueMessage ? <p className="inline-message" role="status">{queueMessage}</p> : null}
       <div className="subsection-title">Recent runs</div>

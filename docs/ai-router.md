@@ -78,6 +78,16 @@ The router evaluates these requirements before selecting a provider. Confidentia
 
 A manual handoff that never receives a pasted response would otherwise sit in `awaiting_external` forever. The agent worker endpoint marks any such run `expired` once it is older than `AGENT_HANDOFF_EXPIRY_HOURS` (default 48; whole hours from 1 to 720, invalid values use the default). Expiry records a `agent_run_expired` Company Brain event and stores an explanatory note in the run's `error` field. Because the paste-back endpoint only accepts `awaiting_external` runs, a late response is rejected; the owner starts a new run instead. Expiry runs whenever the worker polls (`npm run agents:worker` or **Run next queued task**), so an offline worker does not expire anything. The AI Workforce page shows an **Expired handoffs** count.
 
+## Local model run cap
+
+Automatic routing and the worker would otherwise send every eligible task to Ollama with no limit, which can monopolise a local machine during a busy agent loop. CompanyOS caps local runs: once `AGENT_LOCAL_MAX_RUNS_PER_HOUR` Ollama runs (default 30; `0` disables the cap; invalid values use the default) have started in the last hour, Ollama is skipped by the planner until older runs age out of the one-hour window.
+
+- **Auto runs** fall through to the next provider, then to manual handoff.
+- **Queued runs** are not claimed when nothing else can run them; the worker returns HTTP 503 explaining the limit. If a claimed run turns out to need Ollama, it fails with a note that the limit was reached, and can be retried.
+- **Explicit `ollama` requests** return HTTP 503 with the usage; they are never redirected silently.
+- Runs count whether they completed, failed or are still running, because the model did the work. Queued worker runs record `ollama` only when they finish, so in-flight runs are not counted and several workers can briefly exceed the cap.
+- The AI Workforce page shows **Local runs (1h)** as `used/limit` and marks it paused when the cap is reached.
+
 ## Database-backed tests
 
 `npm test` runs without a database; tests that need one are skipped. To run them, migrate a local PostgreSQL and set `DATABASE_URL`:

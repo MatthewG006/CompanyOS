@@ -11,6 +11,8 @@ export type DispatchPolicy = {
   allowBillable: boolean;
   codexAuthenticated: boolean;
   manualProvider?: ProviderId;
+  /** Providers to skip even if configured, e.g. a local model that has hit its hourly run cap. */
+  unavailable?: ProviderId[];
 };
 
 export type DispatchPlan = {
@@ -31,6 +33,7 @@ export class DispatchError extends Error {
 
 function usable(provider: ProviderDefinition, policy: DispatchPolicy) {
   if (!provider.isConfigured()) return false;
+  if (policy.unavailable?.includes(provider.id)) return false;
   if (provider.id === "codex-cli" && !policy.codexAuthenticated) return false;
   return true;
 }

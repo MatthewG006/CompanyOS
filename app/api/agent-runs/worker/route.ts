@@ -7,6 +7,7 @@ import { executeAgent } from "@/lib/ai/executor";
 import { providerRegistry } from "@/lib/ai/provider-registry";
 import { executeWithFallback, planDispatch } from "@/lib/ai/dispatch-plan";
 import { expireStaleHandoffs, handoffExpiryHours } from "@/lib/ai/handoff-expiry";
+import { capNotice, localCapStatus, localRunsPerHour } from "@/lib/ai/local-cap";
 import { normalizeProviderList, normalizeTaskCapabilities, normalizeTaskConstraints, type TaskSpec } from "@/lib/ai/task-spec";
 import { dispatchDueSalesFollowups } from "@/lib/workflows/sales-followups";
 import { processNextOutboundEmail } from "@/lib/workflows/outbound-email";
@@ -52,8 +53,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Sales reminder dispatch failed." }, { status: 500 });
   }
   // Queued runs have no one to paste a response and must never reach billable APIs: Codex CLI first, then a local model.
-  const plan = planDispatch({ requested: "auto", automaticOnly: true, allowBillable: false, codexAuthenticated: codex.authenticated }, providerRegistry());
-  if (!plan.automatic.length) return NextResponse.json({ error: `${codex.message} Configure OLLAMA_MODEL to allow a local fallback.`, provider_status: codex, sales_reminders_created: salesRemindersCreated, handoffs_expired: handoffsExpired }, { status: 503 });
+  const localCap = await localCapStatus(query, localRunsPerHour(process.env.AGENT_LOCAL_MAX_RUNS_PER_HOUR));
+  const unavailable: ("ollama")[] = localCap.capped ? ["ollama"] : [];
+  const plan = planDispatch({ requested: "auto", automaticOnly: true, allowBillable: false, codexAuthenticated: codex.authenticated, unavailable }, providerRegistry());
+  if (!plan.automatic.length) return NextResponse.json({ error: `${codex.message} Configure OLLAMA_MODEL to allow a local fallback.${capNotice(localCap)}`, provider_status: codex, sales_reminders_created: salesRemindersCreated, handoffs_expired: handoffsExpired }, { status: 503 });
 
   try {
     const run = await transaction(async (client) => {
@@ -116,13 +119,13 @@ export async function POST(request: Request) {
       },
     };
     const workerPlan = planDispatch(
-      { requested: "auto", automaticOnly: true, allowBillable: false, codexAuthenticated: codex.authenticated },
+      { requested: "auto", automaticOnly: true, allowBillable: false, codexAuthenticated: codex.authenticated, unavailable },
       providerRegistry(),
       taskSpec,
     );
     if (!workerPlan.automatic.length) {
       await transaction(async (client) => {
-        await client.query(`UPDATE agent_runs SET status='failed',error='No automatic provider satisfies the task execution requirements.',summary='Task requirements cannot be executed by the worker.',completed_at=NOW() WHERE id=$1 AND status='running'`, [run.id]);
+        await client.query(`UPDATE agent_runs SET status='failed',error='No automatic provider satisfies the task execution requirements.'||$2::text,summary='Task requirements cannot be executed by the worker.',completed_at=NOW() WHERE id=$1 AND status='running'`, [run.id, capNotice(localCap)]);
         await client.query("UPDATE workflow_dispatches SET status='failed' WHERE agent_run_id=$1", [run.id]);
       });
       return NextResponse.json({ worked: true, run_id: run.id, status: "failed", task_requirements: taskSpec });

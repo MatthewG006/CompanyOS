@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { after, before, test } from "node:test";
+import { test } from "node:test";
 import pg from "pg";
 import { DEFAULT_HANDOFF_EXPIRY_HOURS, expireStaleHandoffs, handoffExpiryHours } from "../lib/ai/handoff-expiry.ts";
 
@@ -13,17 +13,11 @@ test("expiry hours default and clamp invalid input", () => {
 
 // Integration test: needs a migrated PostgreSQL (npm run db:migrate). Skipped when DATABASE_URL is not set.
 const url = process.env.DATABASE_URL;
-let client: pg.Client | undefined;
-before(async () => {
-  if (!url) return;
-  client = new pg.Client({ connectionString: url });
-  await client.connect();
-});
-after(async () => { await client?.end(); });
 
 test("expireStaleHandoffs only expires old awaiting_external runs and audits each one", { skip: !url && "DATABASE_URL not set" }, async () => {
-  assert.ok(client);
-  const db: pg.Client = client;
+  // Connect inside the test so an unreachable database cannot fail the pure tests in this file.
+  const db = new pg.Client({ connectionString: url });
+  await db.connect();
   await db.query("BEGIN");
   try {
     const insert = async (status: string, ageHours: number) => (await db.query<{ id: string }>(
@@ -49,6 +43,7 @@ test("expireStaleHandoffs only expires old awaiting_external runs and audits eac
     const late = await db.query("UPDATE agent_runs SET status='completed' WHERE id=$1 AND status='awaiting_external' RETURNING id", [stale]);
     assert.equal(late.rowCount, 0);
   } finally {
-    await db.query("ROLLBACK");
+    await db.query("ROLLBACK").catch(() => undefined);
+    await db.end();
   }
 });

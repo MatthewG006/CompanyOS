@@ -96,3 +96,13 @@ test("task provider preferences influence automatic ordering", () => {
   assert.deepEqual(planDispatch(base, providers, task).automatic, ["ollama", "codex-cli"]);
   assert.deepEqual(planDispatch(base, providers, { ...task, execution: {} }).automatic, ["codex-cli", "ollama"]);
 });
+
+test("unavailable providers are skipped, so auto routing and queued runs avoid a capped local model", () => {
+  assert.deepEqual(planDispatch({ ...base, unavailable: ["ollama"] }, providers).automatic, ["codex-cli"]);
+  assert.deepEqual(planDispatch({ ...base, codexAuthenticated: false, unavailable: ["ollama"] }, providers).automatic, []);
+  // Interactive auto runs then fall through to a manual handoff; queued runs get nothing.
+  assert.equal(planDispatch({ ...base, codexAuthenticated: false, unavailable: ["ollama"] }, providers).manual, "chatgpt-free");
+  assert.equal(planDispatch({ ...base, codexAuthenticated: false, automaticOnly: true, unavailable: ["ollama"] }, providers).manual, null);
+  // An explicit request for the capped provider is not silently redirected.
+  assert.deepEqual(planDispatch({ ...base, requested: "ollama", unavailable: ["ollama"] }, providers), { automatic: [], manual: null });
+});

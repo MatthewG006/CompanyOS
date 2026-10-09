@@ -6,6 +6,7 @@ import { buildTaskPrompt, configuredProviders, getCodexCliStatus, handoffProvide
 import { executeAgent } from "@/lib/ai/executor";
 import { providerRegistry } from "@/lib/ai/provider-registry";
 import { DispatchError, executeWithFallback, planDispatch } from "@/lib/ai/dispatch-plan";
+import { capNotice, localCapStatus, localRunsPerHour } from "@/lib/ai/local-cap";
 import { normalizeProviderList, normalizeTaskCapabilities, normalizeTaskConstraints, type TaskSpec } from "@/lib/ai/task-spec";
 
 export const dynamic = "force-dynamic";
@@ -32,11 +33,12 @@ export async function GET(request: Request) {
   const countResult = await query<{ status: string; count: string }>("SELECT status,COUNT(*)::text AS count FROM agent_runs GROUP BY status");
   const run_counts = Object.fromEntries(countResult.rows.map((row) => [row.status, Number(row.count)]));
   const codex_cli = await getCodexCliStatus();
+  const local_cap = await localCapStatus(query, localRunsPerHour(process.env.AGENT_LOCAL_MAX_RUNS_PER_HOUR));
   const workerResult = await query<{ status: string; details: { codex_cli_authenticated?: boolean }; last_seen_at: string; online: boolean }>(
     `SELECT status,details,last_seen_at::text,(last_seen_at > NOW()-INTERVAL '3 minutes') AS online
      FROM runtime_heartbeats WHERE service_name='agent-worker'`,
   );
-  return NextResponse.json({ runs: runs.rows, run_counts, providers: { ...configuredProviders(), "codex-cli": codex_cli.authenticated }, provider_status: { "codex-cli": codex_cli }, agent_worker: workerResult.rows[0] ?? null, auth_required: process.env.NODE_ENV !== "production" && Boolean(process.env.COMPANYOS_ADMIN_TOKEN) });
+  return NextResponse.json({ runs: runs.rows, run_counts, local_cap, providers: { ...configuredProviders(), "codex-cli": codex_cli.authenticated }, provider_status: { "codex-cli": codex_cli }, agent_worker: workerResult.rows[0] ?? null, auth_required: process.env.NODE_ENV !== "production" && Boolean(process.env.COMPANYOS_ADMIN_TOKEN) });
 }
 
 type RetryOutcome =
@@ -165,12 +167,14 @@ export async function POST(request: Request) {
     };
     const manualChoice = typeof body?.manual_provider === "string" && (handoffProviders as readonly string[]).includes(body.manual_provider) ? body.manual_provider : undefined;
     const codex = await getCodexCliStatus();
+    const localCap = await localCapStatus(query, localRunsPerHour(process.env.AGENT_LOCAL_MAX_RUNS_PER_HOUR));
     const plan = planDispatch({
       requested: provider,
       automaticOnly: false,
       allowBillable: process.env.AI_AUTO_ALLOW_BILLABLE === "true",
       codexAuthenticated: codex.authenticated,
       manualProvider: manualChoice,
+      unavailable: localCap.capped ? ["ollama"] : [],
     }, providerRegistry(), taskSpec);
     if (!plan.automatic.length && !plan.manual) {
       const message = provider === "codex-cli"
@@ -178,7 +182,7 @@ export async function POST(request: Request) {
         : provider === "auto"
           ? "No configured AI provider satisfies this task's capabilities, sensitivity, cost, and duration constraints."
           : `${provider} is unavailable or does not satisfy this task's execution requirements.`;
-      return NextResponse.json({ error: message, provider_status: { "codex-cli": codex }, task_requirements: taskSpec }, { status: 503 });
+      return NextResponse.json({ error: message + capNotice(localCap), provider_status: { "codex-cli": codex }, local_cap: localCap, task_requirements: taskSpec }, { status: 503 });
     }
 
     const memory = await loadAgentMemory(task.project_id, task.agent_memory_scope, task.id);
