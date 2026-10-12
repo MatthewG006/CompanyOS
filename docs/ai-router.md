@@ -98,3 +98,11 @@ DATABASE_URL=postgres://companyos:companyos_dev_password@localhost:5432/companyo
 ```
 
 The database tests wrap their writes in a transaction that is rolled back, so they leave no rows behind.
+
+## Route tests
+
+`npm run test:routes` builds the app and runs the production server (`next start`) against a **throwaway database** and an in-process fake Ollama, so the real proxy, token auth, run API and worker are exercised without any real model, paid API or Codex CLI. It covers: auth, local-model execution and routing records, fallback to manual handoff, paste-back (once only, never after expiry), the local run cap for interactive and queued runs, and handoff expiry through the worker poll.
+
+- Needs `DATABASE_URL` pointing at a PostgreSQL server where the role can `CREATE DATABASE`. Each run creates `companyos_routes_<random>`, migrates it and drops it afterwards. It never reads or writes the database in `DATABASE_URL` itself, because the worker endpoint also dispatches sales reminders and outbound email.
+- The tests blank the OpenAI/Anthropic keys and point `CODEX_CLI_PATH` at a nonexistent file for the server they start.
+- Without `DATABASE_URL`, without a build, or without `CREATE DATABASE` rights the tests are skipped with a reason. `npm test` does not run them.
