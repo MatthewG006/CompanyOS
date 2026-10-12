@@ -20,6 +20,9 @@ test("expireStaleHandoffs only expires old awaiting_external runs and audits eac
   await db.connect();
   await db.query("BEGIN");
   try {
+    // The query expires every stale handoff in the database, so account for any that already exist.
+    const preexisting = Number((await db.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM agent_runs WHERE status='awaiting_external' AND created_at < NOW() - make_interval(hours => 48)")).rows[0].count);
     const insert = async (status: string, ageHours: number) => (await db.query<{ id: string }>(
       `INSERT INTO agent_runs (provider,status,created_at) VALUES ('chatgpt-free',$1,NOW() - make_interval(hours => $2::int)) RETURNING id`, [status, ageHours])).rows[0].id;
     const stale = await insert("awaiting_external", 49);
@@ -27,7 +30,7 @@ test("expireStaleHandoffs only expires old awaiting_external runs and audits eac
     const done = await insert("completed", 100);
     const queued = await insert("queued", 100);
 
-    assert.equal(await expireStaleHandoffs(db, 48), 1);
+    assert.equal(await expireStaleHandoffs(db, 48), preexisting + 1);
     const states = Object.fromEntries((await db.query<{ id: string; status: string; error: string | null }>("SELECT id,status,error FROM agent_runs WHERE id=ANY($1)", [[stale, fresh, done, queued]])).rows.map((r) => [r.id, r]));
     assert.equal(states[stale].status, "expired");
     assert.match(states[stale].error ?? "", /within 48 hours/);
