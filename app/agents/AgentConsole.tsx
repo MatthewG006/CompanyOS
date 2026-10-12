@@ -197,7 +197,7 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
         </select></label>
         <button type="submit" className="refresh-button router-submit" disabled={busy || source !== "database" || !tasks.length}>{busy ? "Working…" : "Run task"}</button>
       </form>
-      {codexStatus && !codexStatus.authenticated ? <p className="inline-message" role="status">{codexStatus.message}</p> : null}
+      {provider === "codex-cli" && codexStatus && !codexStatus.authenticated ? <p className="inline-message" role="status">{codexStatus.message}</p> : null}
       {source !== "database" ? <p className="inline-message">Connect PostgreSQL to run and save tasks.</p> : null}
       {message ? <p className="inline-message" role="status">{message}</p> : null}
       {prompt ? <div className="manual-handoff">
@@ -210,7 +210,7 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
       </div> : null}
     </section>
     <section className="panel agent-run-history">
-      <div className="panel-head"><div><h2>Agent execution queue</h2><p className="muted">Queued work is claimed by the Codex worker. This page refreshes automatically.</p><div className={`worker-status ${workerStatus?.online ? "online" : "offline"}`}><span />{workerStatus?.online ? `Worker online · Codex CLI ${workerStatus.details.codex_cli_authenticated ? "signed in" : "needs sign-in"}` : "Worker offline"}{workerStatus?.last_seen_at ? ` · last seen ${new Date(workerStatus.last_seen_at).toLocaleString()}` : ""}</div></div><div className="run-toolbar"><button type="button" className="refresh-button" onClick={() => void runNextQueued()} disabled={busy || source !== "database" || configured["codex-cli"] === false}>{busy ? "Working…" : "Run next queued task"}</button><button type="button" className="refresh-button" onClick={() => void refresh()} disabled={busy}>Refresh</button></div></div>
+      <div className="panel-head"><div><h2>Agent execution queue</h2><p className="muted">Queued work is claimed by the agent worker: Codex CLI first, then a local model. This page refreshes automatically.</p><div className={`worker-status ${workerStatus?.online ? "online" : "offline"}`}><span />{workerStatus?.online ? `Worker online · Codex CLI ${workerStatus.details.codex_cli_authenticated ? "signed in" : "needs sign-in"}` : "Worker offline"}{workerStatus?.last_seen_at ? ` · last seen ${new Date(workerStatus.last_seen_at).toLocaleString()}` : ""}</div></div><div className="run-toolbar"><button type="button" className="refresh-button" onClick={() => void runNextQueued()} disabled={busy || source !== "database" || configured["codex-cli"] === false}>{busy ? "Working…" : "Run next queued task"}</button><button type="button" className="refresh-button" onClick={() => void refresh()} disabled={busy}>Refresh</button></div></div>
       {authRequired ? <p className="queue-note">Enter the admin token above to view run history or start queued work.</p> : null}
       <section className="run-stats" aria-label="Agent run totals">
         <div><span>Queued</span><strong>{runCounts.queued ?? 0}</strong></div>
