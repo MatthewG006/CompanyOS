@@ -187,7 +187,9 @@ export async function runWithProvider(provider: RoutedProvider, prompt: string):
   const body = await requestJson(`${baseUrl}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, stream: false, messages: [{ role: "user", content: prompt }], options: { num_predict: 1800 } }),
+    // format: "json" makes Ollama return valid JSON, because small local models otherwise tend to answer in prose
+    // and ignore the one-JSON-object contract in buildTaskPrompt that proposal parsing depends on.
+    body: JSON.stringify({ model, stream: false, format: "json", messages: [{ role: "user", content: prompt }], options: { num_predict: 1800 } }),
   });
   const text = body.message?.content;
   if (typeof text !== "string") throw new Error("Ollama returned no text response.");

@@ -58,6 +58,7 @@ describe("agent run routes", { skip: skipReason }, () => {
     await db.query("TRUNCATE agent_runs, events CASCADE");
     ollama.mode = "ok";
     ollama.prompts.length = 0;
+    ollama.formats.length = 0;
   };
 
   test("rejects requests without the admin token", async () => {
@@ -83,6 +84,7 @@ describe("agent run routes", { skip: skipReason }, () => {
     assert.equal(body.model, "fake-model");
     assert.equal(ollama.prompts.length, 1);
     assert.match(ollama.prompts[0], new RegExp(TITLE));
+    assert.equal(ollama.formats[0], "json", "Ollama must be asked for JSON so proposals can be parsed");
     const run = await row(body.run_id);
     assert.equal(run.status, "completed");
     assert.equal(run.provider, "ollama");

@@ -9,15 +9,19 @@ export const ADMIN_TOKEN = "route-test-token";
 const root = process.cwd();
 
 /** A stand-in for Ollama's /api/chat so route tests never reach a real model or the network. */
-export type FakeOllama = { url: string; mode: "ok" | "fail"; reply: string; prompts: string[]; close: () => Promise<void> };
+export type FakeOllama = { url: string; mode: "ok" | "fail"; reply: string; prompts: string[]; formats: unknown[]; close: () => Promise<void> };
 
 export async function startFakeOllama(): Promise<FakeOllama> {
-  const fake = { mode: "ok", reply: "Draft: nothing to approve.", prompts: [] as string[] } as FakeOllama;
+  const fake = { mode: "ok", reply: "Draft: nothing to approve.", prompts: [] as string[], formats: [] as unknown[] } as FakeOllama;
   const server: Server = createServer((request, response) => {
     let raw = "";
     request.on("data", (chunk) => { raw += chunk; });
     request.on("end", () => {
-      try { fake.prompts.push(JSON.parse(raw).messages?.[0]?.content ?? ""); } catch { fake.prompts.push(""); }
+      try {
+        const parsed = JSON.parse(raw);
+        fake.prompts.push(parsed.messages?.[0]?.content ?? "");
+        fake.formats.push(parsed.format);
+      } catch { fake.prompts.push(""); fake.formats.push(undefined); }
       if (fake.mode === "fail") { response.writeHead(500).end("model crashed"); return; }
       response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ message: { content: fake.reply } }));
     });
