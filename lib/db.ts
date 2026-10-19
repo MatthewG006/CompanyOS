@@ -40,9 +40,12 @@ export async function transaction<T>(work: (client: PoolClient) => Promise<T>): 
 
 export async function databaseAvailable() {
   try {
-    await query("SELECT 1");
-    return true;
-  } catch {
+    const result = await query("SELECT 1");
+    // Ensure we actually got a result back before returning true
+    return result !== null && result !== undefined;
+  } catch (error) {
+    console.error("Database connection check failed:", error);
     return false;
   }
 }
+
