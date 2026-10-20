@@ -1,6 +1,5 @@
 import type { PoolClient } from "pg";
 import { sendGoogleEmail } from "@/lib/integrations/google";
-import { loadAgentMemory } from "@/lib/ai/memory";
 import { buildTaskPrompt } from "@/lib/ai/router";
 
 type AgentActionRequest = {

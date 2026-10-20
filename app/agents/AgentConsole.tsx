@@ -209,11 +209,60 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
     setTimeout(() => setCopiedPrompt(false), 2500);
   }
 
-  function selectTaskAndDispatch(selectedTaskId: string, preferredProvider?: Provider) {
+  async function selectTaskAndDispatch(selectedTaskId: string, preferredProvider?: Provider) {
     setTaskId(selectedTaskId);
+    const targetProvider = preferredProvider ?? provider;
     if (preferredProvider) {
       setProvider(preferredProvider);
     }
+    setBusy(true);
+    setMessage("");
+    setPrompt("");
+    setActiveRunId("");
+    try {
+      const payload: { task_id: string; provider: Provider; manual_provider?: string } = {
+        task_id: selectedTaskId,
+        provider: targetProvider,
+      };
+      if (targetProvider === "auto") {
+        payload.manual_provider = manualFallback;
+      }
+      const response = await fetch("/api/agent-runs", { method: "POST", headers: requestHeaders(), body: JSON.stringify(payload) });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Task run failed.");
+
+      if (body.status === "queued" || body.status === "running") {
+        // Automatically attempt worker execution for queued runs
+        try {
+          const workerRes = await fetch("/api/agent-runs/worker", { method: "POST", headers: requestHeaders(), body: "{}" });
+          const workerBody = await workerRes.json();
+          if (workerRes.ok && workerBody.worked) {
+            setMessage(`Task dispatched & worker completed run: ${workerBody.status}.${workerBody.approval_proposals ? ` ${workerBody.approval_proposals} proposed action(s) created.` : ""}`);
+          } else {
+            setMessage("Task dispatched and queued for processing.");
+          }
+        } catch {
+          setMessage("Task dispatched and queued for background worker.");
+        }
+      } else if (body.status === "awaiting_external") {
+        const handoff = (body.provider ?? targetProvider) as Provider;
+        setPrompt(body.prompt);
+        setActiveRunId(body.run_id);
+        setActiveProvider(handoff);
+        const fellBack = Array.isArray(body.attempts) && body.attempts.length > 0;
+        setMessage(`${fellBack ? "Automatic providers were unavailable or failed. " : ""}Prompt prepared for ${providerLabels[handoff] ?? handoff}. Copy it or open the service below, then submit its response.`);
+      } else {
+        const proposalNotice = body.approval_proposals ? ` ${body.approval_proposals} follow-up task proposal(s) are waiting for owner approval on the dashboard.` : "";
+        setMessage(`Run completed with ${providerLabels[body.provider as Provider] ?? body.provider} (${body.model}). The result is saved in CompanyOS.${proposalNotice}`);
+      }
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not start task run.");
+      await refresh().catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
+
     const targetElement = document.getElementById("task-runner-form");
     if (targetElement) {
       targetElement.scrollIntoView({ behavior: "smooth" });
