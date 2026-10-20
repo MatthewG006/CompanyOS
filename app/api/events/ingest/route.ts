@@ -26,7 +26,25 @@ export async function POST(request: Request) {
     const result = await query<{ id: string }>(`INSERT INTO events (project_id,source,event_type,title,severity,payload,idempotency_key)
       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)
       ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING RETURNING id`, [project.rows[0]?.id ?? null, source, eventType, title.slice(0, 500), severity, JSON.stringify(payload), idempotencyKey]);
-    return NextResponse.json({ ok: true, duplicate: result.rowCount === 0, event_id: result.rows[0]?.id ?? null });
+
+    const isDuplicate = result.rowCount === 0;
+    let createdTaskId: string | null = null;
+
+    if (!isDuplicate && (severity === "critical" || payload.create_task === true)) {
+      const taskPriority = severity === "critical" ? "high" : "normal";
+      const taskResult = await query<{ id: string }>(
+        `INSERT INTO tasks (project_id, title, priority, status) VALUES ($1, $2, $3, 'todo') RETURNING id`,
+        [project.rows[0]?.id ?? null, `[${source.toUpperCase()}] ${title}`, taskPriority]
+      );
+      createdTaskId = taskResult.rows[0]?.id ?? null;
+    }
+
+    return NextResponse.json({
+      ok: true,
+      duplicate: isDuplicate,
+      event_id: result.rows[0]?.id ?? null,
+      task_id: createdTaskId,
+    });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid request." }, { status: 400 });
   }
