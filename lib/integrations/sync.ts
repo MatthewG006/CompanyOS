@@ -58,15 +58,19 @@ async function syncGitHub(): Promise<SyncResult> {
   const selectedRepo = process.env.GITHUB_REPO;
   if (selectedRepo) {
     const owner = process.env.GITHUB_OWNER ?? me.login;
-    const [issues, pulls] = await Promise.all([
-      fetchJson<Array<{ id: number; number: number; title: string; html_url: string; state: string; user?: { login?: string }; updated_at: string; pull_request?: unknown }>>(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(selectedRepo)}/issues?state=open&per_page=50`, { headers }),
-      fetchJson<Array<{ id: number; number: number; title: string; html_url: string; state: string; user?: { login?: string }; updated_at: string }>>(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(selectedRepo)}/pulls?state=open&per_page=50`, { headers }),
+    const [issues, pulls, runs] = await Promise.all([
+      fetchJson<Array<{ id: number; number: number; title: string; html_url: string; state: string; user?: { login?: string }; updated_at: string; pull_request?: unknown }>>(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(selectedRepo)}/issues?state=open&per_page=50`, { headers }).catch(() => []),
+      fetchJson<Array<{ id: number; number: number; title: string; html_url: string; state: string; user?: { login?: string }; updated_at: string }>>(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(selectedRepo)}/pulls?state=open&per_page=50`, { headers }).catch(() => []),
+      fetchJson<{ workflow_runs?: Array<{ id: number; name: string; html_url: string; status: string; conclusion: string | null; updated_at: string }> }>(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(selectedRepo)}/actions/runs?per_page=20`, { headers }).catch(() => ({ workflow_runs: [] })),
     ]);
     for (const item of issues.filter((item) => !item.pull_request)) {
       written += await upsertExternalRecord({ provider: "github", record_type: "issue", external_id: String(item.id), title: item.title, url: item.html_url, status: item.state, owner: item.user?.login ?? null, occurred_at: item.updated_at, payload: item });
     }
     for (const item of pulls) {
       written += await upsertExternalRecord({ provider: "github", record_type: "pull_request", external_id: String(item.id), title: item.title, url: item.html_url, status: item.state, owner: item.user?.login ?? null, occurred_at: item.updated_at, payload: item });
+    }
+    for (const run of runs.workflow_runs ?? []) {
+      written += await upsertExternalRecord({ provider: "github", record_type: "workflow_run", external_id: String(run.id), title: `${run.name} (${run.conclusion ?? run.status})`, url: run.html_url, status: run.conclusion ?? run.status, owner: null, occurred_at: run.updated_at, payload: run });
     }
   }
   return { seen: repos.length + (selectedRepo ? 0 : 0), written };
