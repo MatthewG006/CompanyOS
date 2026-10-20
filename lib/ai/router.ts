@@ -54,15 +54,15 @@ function findCodexCli() {
 
 export type CodexCliStatus = { installed: boolean; authenticated: boolean; message: string };
 let codexStatusCache: { expiresAt: number; value: CodexCliStatus } | null = null;
-let codexStatusCheck: Promise | null = null;
+let codexStatusCheck: Promise<CodexCliStatus> | null = null;
 
-export async function getCodexCliStatus(): Promise {
+export async function getCodexCliStatus(): Promise<CodexCliStatus> {
   if (codexStatusCache && codexStatusCache.expiresAt > Date.now()) return codexStatusCache.value;
   if (codexStatusCheck) return codexStatusCheck;
   const executable = findCodexCli();
   if (!executable) return { installed: false, authenticated: false, message: "Codex CLI is not installed." };
 
-  const check = new Promise((resolve) => {
+  const check = new Promise<CodexCliStatus>((resolve) => {
     const env: NodeJS.ProcessEnv = {
       NODE_ENV: "production",
       PATH: process.env.PATH,
@@ -100,7 +100,7 @@ export async function getCodexCliStatus(): Promise {
 }
 
 export function configuredProviders() {
-  return Object.fromEntries(providerRegistry().map((provider) => [provider.id, provider.isConfigured()])) as Record;
+  return Object.fromEntries(providerRegistry().map((provider) => [provider.id, provider.isConfigured()])) as Record<AgentProvider, boolean>;
 }
 
 export function buildTaskPrompt(task: AgentTask, memory: AgentMemory = {}) {
@@ -130,7 +130,7 @@ export function buildTaskPrompt(task: AgentTask, memory: AgentMemory = {}) {
     proposedActionTypes.includes("record_income") ? 'For record_income: propose only when the provided billing email snippet clearly confirms a payment, receipt, or completed purchase and explicitly contains the amount and transaction date. Never treat quotes, proposals, unpaid invoices, or expected revenue as income. Never infer missing amounts or dates. Set category to sales; include a concise description and explain the exact evidence in reason.' : "",
     proposedActionTypes.includes("create_sales_lead") ? 'For create_sales_lead: propose only when the Gmail snippet is a credible inbound buying inquiry for the assigned project. Never create a lead from newsletters, spam, vendors, job inquiries, or ambiguous messages. Use a concise opportunity title and explain the sender intent in reason. The owner must approve before the contact enters the pipeline.' : "",
     proposedActionTypes.includes("send_email") ? 'For send_email: draft outreach only to one of the exact contact_email values in sales_opportunities and only for an active opportunity. Personalize using supplied facts; do not invent prior contact, claims, urgency, discounts, or relationship. Avoid deceptive subjects. Keep the draft concise and relevant. The owner reviews and approves the exact message before any send. Return fields to, subject, body, reason.' : "",
-    proposedActionTypes.includes("send_email") && (memory as AgentMemory).gmail_follow_up && typeof (memory as AgentMemory).gmail_follow_up === "object" && ((memory as AgentMemory).gmail_follow_up as Record).category === "sales_followup"
+    proposedActionTypes.includes("send_email") && (memory as AgentMemory).gmail_follow_up && typeof (memory as AgentMemory).gmail_follow_up === "object" && ((memory as AgentMemory).gmail_follow_up as Record<string, unknown>).category === "sales_followup"
       ? 'This is a scheduled sales follow-up task. Draft at most one message and target only the active opportunity identified by sales_lead_id and opportunity_title in the workflow context. Match its contact_email in sales_opportunities exactly; if it does not match or there is not a clear, truthful reason to contact them, propose no email.' : "",
     proposedActionTypes.includes("update_support_case") ? 'For update_support_case: propose only an internal status change for the assigned support_case. Choose in_progress, waiting, or resolved based on evidence in that case. Never claim to contact the customer, issue refunds, change access, or perform external actions. The owner must approve the status change.' : "",
     'Return one JSON object: {"summary":"...","work_completed":[],"evidence":[],"risks":[],"next_actions":[],"proposed_actions":[{"type":"create_task","title":"...","priority":"low|normal|high|critical","reason":"..."},{"type":"set_task_status","status":"in_progress|done","reason":"..."},{"type":"delegate_task","assignee_agent_id":"direct report UUID","title":"...","priority":"low|normal|high|critical","reason":"..."},{"type":"record_income","amount_cents":12345,"transaction_date":"YYYY-MM-DD","description":"...","reason":"..."},{"type":"create_sales_lead","opportunity_title":"...","reason":"..."},{"type":"send_email","to":"contact_email from sales_opportunities","subject":"...","body":"...","reason":"..."},{"type":"update_support_case","status":"in_progress|waiting|resolved","reason":"..."}]}. Use only the listed permitted proposal types and only the listed direct reports; proposals are requests only and need owner approval.',
@@ -153,10 +153,10 @@ type ProviderResponse = {
 async function requestJson(url: string, init: RequestInit) {
   const response = await fetch(url, { ...init, signal: AbortSignal.timeout(60_000) });
   if (!response.ok) throw new Error(`Model provider returned HTTP ${response.status}.`);
-  return response.json() as Promise;
+  return response.json() as Promise<ProviderResponse>;
 }
 
-export async function runWithProvider(provider: RoutedProvider, prompt: string): Promise {
+export async function runWithProvider(provider: RoutedProvider, prompt: string): Promise<ProviderResult> {
   if (provider === "openai") {
     const key = process.env.OPENAI_API_KEY;
     const model = process.env.AI_OPENAI_MODEL;
@@ -198,7 +198,7 @@ export async function runWithProvider(provider: RoutedProvider, prompt: string):
   return { text, model };
 }
 
-export async function runWithCodexCli(prompt: string): Promise {
+export async function runWithCodexCli(prompt: string): Promise<ProviderResult> {
   const executable = findCodexCli();
   if (!executable) throw new Error("Codex CLI is not installed or CODEX_CLI_PATH is invalid.");
   const workspace = await mkdtemp(join(tmpdir(), "companyos-agent-"));

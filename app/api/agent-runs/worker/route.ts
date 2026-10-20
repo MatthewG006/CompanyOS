@@ -62,13 +62,13 @@ export async function POST(request: Request) {
     const run = await transaction(async (client) => {
       await client.query(`WITH expired AS (
           UPDATE agent_runs SET status='failed',error='Worker lease expired.',summary='Worker lease expired.',completed_at=NOW()
-          WHERE status='running' AND provider='codex-cli' AND summary='Worker running.' AND started_at < NOW()-INTERVAL '5 minutes'
+          WHERE status='running' AND provider IN ('codex-cli', 'ollama', 'auto') AND summary='Worker running.' AND started_at < NOW()-INTERVAL '5 minutes'
           RETURNING id
         )
         UPDATE workflow_dispatches SET status='failed' WHERE agent_run_id IN (SELECT id FROM expired)`);
       const result = await client.query<{ id: string; task_id: string | null; input: Record<string, unknown> }>(
         `WITH candidate AS (
-           SELECT id FROM agent_runs WHERE status='queued' AND provider='codex-cli'
+           SELECT id FROM agent_runs WHERE status='queued' AND provider IN ('codex-cli', 'ollama', 'auto', 'agnostic')
            ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
          )
          UPDATE agent_runs r SET status='running',summary='Worker running.',started_at=NOW(),error=NULL

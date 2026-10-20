@@ -1,5 +1,7 @@
 import type { PoolClient } from "pg";
 import { sendGoogleEmail } from "@/lib/integrations/google";
+import { loadAgentMemory } from "@/lib/ai/memory";
+import { buildTaskPrompt } from "@/lib/ai/router";
 
 type AgentActionRequest = {
   reason: string;
@@ -176,15 +178,28 @@ const delegateTaskTool: AgentTool = {
       [projectId, targetId, title, priority],
     );
     const delegatedTaskId = result.rows[0].id;
+    const targetAgentResult = await client.query<{ id: string; name: string; role: string | null; mission: string | null; description: string | null; provider: string; memory_scope: string[]; allowed_actions: string[] }>("SELECT id,name,role,mission,description,provider,memory_scope,allowed_actions FROM agents WHERE id=$1", [targetId]);
+    const assignee = targetAgentResult.rows[0];
+    const isManual = assignee && ["chatgpt-free", "claude-free", "codex"].includes(assignee.provider);
+    const runProvider = isManual ? assignee.provider : (assignee?.provider === "agnostic" || !assignee?.provider ? "codex-cli" : assignee.provider);
+    const runStatus = isManual ? "awaiting_external" : "queued";
+    const runModel = isManual ? "manual handoff" : null;
+    const runSummary = isManual ? "Prompt ready for manual provider handoff." : "Queued delegation execution.";
+    const delegationInput = isManual && assignee ? {
+      source: "owner_approved_delegation",
+      delegated_by_agent_id: agentId,
+      prompt: buildTaskPrompt({ title, priority: priority as "low" | "normal" | "high" | "critical", project_name: null, agent_name: assignee.name, agent_manager_name: null, agent_role: assignee.role, agent_mission: assignee.mission, agent_description: assignee.description, agent_memory_scope: assignee.memory_scope, agent_allowed_actions: assignee.allowed_actions }, {}),
+      routing: { requested: assignee.provider, manual: assignee.provider },
+    } : { source: "owner_approved_delegation", delegated_by_agent_id: agentId };
     await client.query(
-      `INSERT INTO agent_runs (agent_id,task_id,provider,status,summary,input)
-       VALUES ($1,$2,'codex-cli','queued','Queued delegation execution.',$3::jsonb)`,
-      [targetId, delegatedTaskId, JSON.stringify({ source: "owner_approved_delegation", delegated_by_agent_id: agentId })],
+      `INSERT INTO agent_runs (agent_id,task_id,provider,model,status,summary,input)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+      [targetId, delegatedTaskId, runProvider, runModel, runStatus, runSummary, JSON.stringify(delegationInput)],
     );
     await client.query(
       `INSERT INTO events (project_id,source,event_type,title,severity,payload)
        VALUES ($1,'agent-router','agent_run_queued',$2,'info',$3::jsonb)`,
-      [projectId, `Delegated task queued for ${title}`, JSON.stringify({ task_id: delegatedTaskId, agent_id: targetId, provider: "codex-cli" })],
+      [projectId, isManual ? `Delegated task handed off to ${runProvider} for ${title}` : `Delegated task queued for ${title}`, JSON.stringify({ task_id: delegatedTaskId, agent_id: targetId, provider: runProvider })],
     );
     return delegatedTaskId;
   },

@@ -61,7 +61,7 @@ async function queueFailedCodexRetry(runId: string): Promise<RetryOutcome> {
       FROM agent_runs r LEFT JOIN tasks t ON t.id=r.task_id WHERE r.id=$1 FOR UPDATE OF r`, [runId]);
     const source = sourceResult.rows[0];
     if (!source) return { ok: false, error: "Agent run not found.", statusCode: 404 };
-    if (source.provider !== "codex-cli") return { ok: false, error: "Only failed Codex CLI runs can be retried in the queue.", statusCode: 400 };
+    if (source.provider !== "codex-cli" && source.provider !== "ollama" && source.provider !== "auto") return { ok: false, error: "Only failed automated runs (Codex CLI, Ollama, auto) can be retried in the queue.", statusCode: 400 };
     if (source.status !== "failed") return { ok: false, error: "Only failed runs can be retried.", statusCode: 409 };
     if (!source.task_id || !source.agent_id || !source.task_status || source.task_status === "done") {
       return { ok: false, error: "The failed run's task is missing, complete, or unassigned.", statusCode: 409 };
@@ -89,10 +89,10 @@ async function queueFailedCodexRetry(runId: string): Promise<RetryOutcome> {
     };
     const inserted = await client.query<{ id: string; status: string }>(
       `INSERT INTO agent_runs (agent_id,task_id,provider,status,summary,input,retry_of_run_id)
-       VALUES ($1,$2,'codex-cli','queued','Queued retry after failed Codex CLI run.',$3::jsonb,$4)
+       VALUES ($1,$2,$5,'queued','Queued retry after failed agent run.',$3::jsonb,$4)
        ON CONFLICT (retry_of_run_id) WHERE retry_of_run_id IS NOT NULL DO NOTHING
        RETURNING id,status`,
-      [source.agent_id, source.task_id, JSON.stringify(retryInput), source.id],
+      [source.agent_id, source.task_id, JSON.stringify(retryInput), source.id, source.provider],
     );
     const retry = inserted.rows[0];
     if (!retry) {
@@ -107,7 +107,7 @@ async function queueFailedCodexRetry(runId: string): Promise<RetryOutcome> {
 
     await client.query(
       `INSERT INTO events (source,event_type,title,severity,payload)
-       VALUES ('agent-router','agent_run_retried','Failed Codex run queued for retry','info',$1::jsonb)`,
+       VALUES ('agent-router','agent_run_retried','Failed agent run queued for retry','info',$1::jsonb)`,
       [JSON.stringify({ previous_run_id: source.id, retry_run_id: retry.id, task_id: source.task_id })],
     );
     await client.query("UPDATE workflow_dispatches SET agent_run_id=$2,status='queued' WHERE agent_run_id=$1", [source.id, retry.id]);

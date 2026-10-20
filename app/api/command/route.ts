@@ -34,7 +34,7 @@ export async function POST(request: Request) {
       route = "projects";
     } else if (lower.includes("agent") || lower.includes("workforce")) {
       const working = data.agents.filter((agent) => agent.status === "working");
-      message = `${data.agents.length} AI roles are registered. ${working.length} are marked working: ${working.map((agent) => agent.name).join(", ") || "none"}.`;
+      message = `${data.agents.length} AI roles are registered. ${working.length} are marked working: ${working.map((agent) => `${agent.name} (${agent.provider})`).join(", ") || "none"}.`;
       route = "agents";
     } else if (lower.includes("system") || lower.includes("health")) {
       const bad = data.system_checks.filter((check) => !["healthy", "active"].includes(check.status));
@@ -49,14 +49,32 @@ export async function POST(request: Request) {
         message = "Task creation requires the PostgreSQL Company Brain to be available.";
         route = "task-create-unavailable";
       } else {
-        const title = command.replace(/^(create task|add task)\s*[:-]?\s*/i, "").trim();
-        if (!title) {
-          message = "Use: Create task: <task title>";
+        let raw = command.replace(/^(create task|add task)\s*[:-]?\s*/i, "").trim();
+        let targetAgent: { id: string; name: string } | null = null;
+        const agentMatch = raw.match(/^(?:for|to)\s+([a-zA-Z0-9\s]+?)\s*[:-]\s*(.*)$/i);
+        if (agentMatch) {
+          const candidateName = agentMatch[1].trim();
+          const found = data.agents.find((a) => a.name.toLowerCase() === candidateName.toLowerCase());
+          if (found) {
+            targetAgent = found;
+            raw = agentMatch[2].trim();
+          }
+        }
+        if (!raw) {
+          message = "Use: Create task: <task title> or Create task for <Agent>: <task title>";
           route = "task-create-help";
         } else {
-          const inserted = await query<{ id: string }>(`INSERT INTO tasks (title, priority, status) VALUES ($1,'normal','todo') RETURNING id`, [title]);
-          await query(`INSERT INTO events (source,event_type,title,severity,payload) VALUES ('command-center','task_created',$1,'info',$2::jsonb)`, [`Task created: ${title}`, JSON.stringify({ task_id: inserted.rows[0].id })]);
-          message = `Created task: ${title}.`;
+          const inserted = await query<{ id: string }>(
+            `INSERT INTO tasks (agent_id, title, priority, status) VALUES ($1,$2,'normal','todo') RETURNING id`,
+            [targetAgent?.id ?? null, raw]
+          );
+          await query(
+            `INSERT INTO events (source,event_type,title,severity,payload) VALUES ('command-center','task_created',$1,'info',$2::jsonb)`,
+            [`Task created: ${raw}`, JSON.stringify({ task_id: inserted.rows[0].id, agent: targetAgent?.name })]
+          );
+          message = targetAgent
+            ? `Created task for ${targetAgent.name}: ${raw}.`
+            : `Created task: ${raw}.`;
           route = "task-create";
         }
       }
@@ -79,7 +97,7 @@ export async function POST(request: Request) {
       message = `Integration registry: ${data.integrations.map((item) => `${item.name}=${item.status}`).join(" · ")}.`;
       route = "integrations";
     } else {
-      message = "Try: Show me everything that needs my attention · List projects · Show AI workforce · Check system health · Show finance · Create task: <title> · Show integrations.";
+      message = "Try: Show me everything that needs my attention · List projects · Show AI workforce · Check system health · Show finance · Create task: <title> · Create task for Engineer: <title> · Show integrations.";
     }
 
     await logCommand(command, route, "completed", message);
