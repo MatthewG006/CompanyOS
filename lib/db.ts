@@ -5,11 +5,14 @@ let pool: Pool | null = null;
 function getPool() {
   if (!process.env.DATABASE_URL) return null;
   if (!pool) {
+    const url = process.env.DATABASE_URL;
+    const isCloudDb = url.includes("supabase.co") || url.includes("sslmode=") || url.includes("render.com") || url.includes("neon.tech");
     pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
+      connectionString: url,
       max: 5,
       idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 5_000,
+      ...(isCloudDb ? { ssl: { rejectUnauthorized: false } } : {}),
     });
   }
   return pool;
