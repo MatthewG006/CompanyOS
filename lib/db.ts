@@ -6,13 +6,16 @@ function getPool() {
   if (!process.env.DATABASE_URL) return null;
   if (!pool) {
     const url = process.env.DATABASE_URL;
-    const isCloudDb = url.includes("supabase.co") || url.includes("sslmode=") || url.includes("render.com") || url.includes("neon.tech");
+    const isLocalhost = url.includes("localhost") || url.includes("127.0.0.1");
+    const sslDisabled = url.includes("sslmode=disable");
+    const useSsl = (!isLocalhost && !sslDisabled) || url.includes("supabase") || url.includes("sslmode=") || url.includes("render.com") || url.includes("neon.tech");
+
     pool = new Pool({
       connectionString: url,
       max: 5,
       idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 5_000,
-      ...(isCloudDb ? { ssl: { rejectUnauthorized: false } } : {}),
+      ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
     });
   }
   return pool;
