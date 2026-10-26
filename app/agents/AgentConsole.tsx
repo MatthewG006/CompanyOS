@@ -386,7 +386,7 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
             type="button"
             className="refresh-button"
             onClick={() => void runNextQueued()}
-            disabled={busy || source !== "database" || (!configured["codex-cli"] && !configured.ollama)}
+            disabled={busy || source !== "database"}
           >
             {busy ? "Working…" : "Run next queued task"}
           </button>
