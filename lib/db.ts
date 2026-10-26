@@ -5,13 +5,16 @@ let pool: Pool | null = null;
 function getPool() {
   if (!process.env.DATABASE_URL) return null;
   if (!pool) {
-    const url = process.env.DATABASE_URL;
-    const isLocalhost = url.includes("localhost") || url.includes("127.0.0.1");
-    const sslDisabled = url.includes("sslmode=disable");
-    const useSsl = (!isLocalhost && !sslDisabled) || url.includes("supabase") || url.includes("sslmode=") || url.includes("render.com") || url.includes("neon.tech");
+    const rawUrl = process.env.DATABASE_URL;
+    const isLocalhost = rawUrl.includes("localhost") || rawUrl.includes("127.0.0.1");
+    const sslDisabled = rawUrl.includes("sslmode=disable");
+    const useSsl = (!isLocalhost && !sslDisabled) || rawUrl.includes("supabase") || rawUrl.includes("sslmode=") || rawUrl.includes("render.com") || rawUrl.includes("neon.tech");
+
+    // Strip sslmode parameters to prevent pg-connection-string from overriding explicit SSL options or raising warnings
+    const cleanedUrl = rawUrl.replace(/([?&])sslmode=[^&]*(&|$)/, "$1").replace(/[?&]$/, "");
 
     pool = new Pool({
-      connectionString: url,
+      connectionString: cleanedUrl,
       max: 5,
       idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 5_000,
