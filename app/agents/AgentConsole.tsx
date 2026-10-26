@@ -378,7 +378,7 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
           <div className={`worker-status ${workerStatus?.online ? "online" : "offline"}`}>
             <span />
             {workerStatus?.online ? `Worker online · Codex CLI ${workerStatus.details.codex_cli_authenticated ? "signed in" : "needs sign-in"}` : "Worker offline"}
-            {workerStatus?.last_seen_at ? ` · last seen ${new Date(workerStatus.last_seen_at).toLocaleString()}` : ""}
+            {workerStatus?.last_seen_at ? <span suppressHydrationWarning> · last seen {new Date(workerStatus.last_seen_at).toLocaleString()}</span> : ""}
           </div>
         </div>
         <div className="run-toolbar">
