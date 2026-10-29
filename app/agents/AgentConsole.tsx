@@ -209,6 +209,26 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
     setTimeout(() => setCopiedPrompt(false), 2500);
   }
 
+  async function markTaskComplete(targetTaskId: string) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: requestHeaders(),
+        body: JSON.stringify({ id: targetTaskId, status: "completed" }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Could not update task status.");
+      setMessage(`Task marked as completed: ${body.task?.title ?? targetTaskId}`);
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not update task status.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function selectTaskAndDispatch(selectedTaskId: string, preferredProvider?: Provider) {
     setTaskId(selectedTaskId);
     const targetProvider = preferredProvider ?? provider;
@@ -291,14 +311,25 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
                   {task.project_name ?? "Company-wide"} · Assigned: {task.agent_name ?? "Unassigned"} · Status: {task.status}
                 </div>
               </div>
-              <button
-                type="button"
-                className="refresh-button"
-                style={{ fontSize: "0.85rem", whiteSpace: "nowrap" }}
-                onClick={() => selectTaskAndDispatch(task.id)}
-              >
-                Select & dispatch →
-              </button>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  className="refresh-button"
+                  style={{ fontSize: "0.85rem", whiteSpace: "nowrap" }}
+                  onClick={() => selectTaskAndDispatch(task.id)}
+                >
+                  Select & dispatch →
+                </button>
+                <button
+                  type="button"
+                  className="refresh-button"
+                  style={{ fontSize: "0.85rem", whiteSpace: "nowrap", opacity: 0.8 }}
+                  onClick={() => markTaskComplete(task.id)}
+                  title="Mark task as completed"
+                >
+                  Mark done ✓
+                </button>
+              </div>
             </div>
           ))}
         </div>
