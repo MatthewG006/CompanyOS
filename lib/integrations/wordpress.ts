@@ -14,9 +14,9 @@ export async function getWordPressCredentials(): Promise<WordPressCredentials | 
 
   if (envUrl && envUser && envPass) {
     return {
-      url: envUrl.replace(/\/+$/, ""),
-      username: envUser,
-      application_password: envPass,
+      url: envUrl.trim().replace(/\/+$/, ""),
+      username: envUser.trim(),
+      application_password: envPass.trim().replace(/\s+/g, ""),
     };
   }
 
