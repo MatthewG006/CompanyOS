@@ -114,13 +114,13 @@ export async function getDashboardData(): Promise<DashboardData> {
   const [projects, agents, tasks, events, approvals, systemChecks, integrations, finance, externalRecords, byProvider, byType, syncRuns, contacts, meetings, attentionItems] = await Promise.all([
     query<Project>(`SELECT p.id, c.name AS company_name, p.name, p.slug, p.description, p.health, p.stage, p.progress,
       COUNT(DISTINCT t.id)::int AS task_count,
-      COUNT(DISTINCT t.id) FILTER (WHERE t.status <> 'done')::int AS open_task_count
+      COUNT(DISTINCT t.id) FILTER (WHERE t.status NOT IN ('done', 'completed'))::int AS open_task_count
       FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN tasks t ON t.project_id=p.id
       GROUP BY p.id,c.name ORDER BY p.name`),
     query<Agent>(`SELECT a.id,a.name,a.role,a.department,a.reports_to,manager.name AS manager_name,a.provider,a.status,a.description,a.mission,
       a.allowed_actions,a.prohibited_actions,a.escalation_rules,a.success_metrics,a.memory_scope,
-      COUNT(DISTINCT t.id) FILTER (WHERE t.status <> 'done')::int AS open_task_count,
-      COUNT(DISTINCT t.id) FILTER (WHERE t.status='done')::int AS completed_task_count,
+      COUNT(DISTINCT t.id) FILTER (WHERE t.status NOT IN ('done', 'completed'))::int AS open_task_count,
+      COUNT(DISTINCT t.id) FILTER (WHERE t.status IN ('done', 'completed'))::int AS completed_task_count,
       COUNT(DISTINCT r.id) FILTER (WHERE r.status='completed' AND r.created_at >= NOW()-INTERVAL '30 days')::int AS completed_runs_30d,
       COUNT(DISTINCT r.id) FILTER (WHERE r.status='failed' AND r.created_at >= NOW()-INTERVAL '30 days')::int AS failed_runs_30d,
       CASE WHEN COUNT(DISTINCT r.id) FILTER (WHERE r.status IN ('completed','failed') AND r.created_at >= NOW()-INTERVAL '30 days') > 0
@@ -133,7 +133,7 @@ export async function getDashboardData(): Promise<DashboardData> {
       GROUP BY a.id,manager.name ORDER BY a.department,a.name`),
     query<Task>(`SELECT t.id,p.name AS project_name,p.slug AS project_slug,a.name AS agent_name,t.title,t.priority,t.status,t.due_at::text
       FROM tasks t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN agents a ON a.id=t.agent_id
-      WHERE t.status <> 'done'
+      WHERE t.status NOT IN ('done', 'completed')
       ORDER BY CASE t.priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
       COALESCE(t.due_at,'2999-12-31'::timestamptz),t.created_at DESC LIMIT 25`),
     query<EventItem>(`SELECT e.id,e.source,e.event_type,e.title,e.severity,e.created_at::text,p.name AS project_name

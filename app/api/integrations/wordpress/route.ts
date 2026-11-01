@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { databaseAvailable, query } from "@/lib/db";
-import { encryptSecret, decryptSecret } from "@/lib/secrets";
+import { encryptSecret } from "@/lib/secrets";
+import { getWordPressCredentials, checkWordPressHealth, createWordPressPost } from "@/lib/integrations/wordpress";
 
 export const dynamic = "force-dynamic";
 
@@ -13,20 +14,20 @@ function authorized(request: Request) {
 
 export async function GET(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
 
   try {
-    const result = await query<{ encrypted_value: string }>(
-      "SELECT encrypted_value FROM integration_secrets WHERE name='wordpress-skymountain' LIMIT 1"
-    );
-    if (!result.rows[0]) {
-      return NextResponse.json({ configured: false });
+    const credentials = await getWordPressCredentials();
+    if (!credentials) {
+      return NextResponse.json({ configured: false, message: "WordPress credentials not found in environment or database." });
     }
-    const credentials = decryptSecret<{ url: string; username: string }>(result.rows[0].encrypted_value);
+
+    const health = await checkWordPressHealth();
     return NextResponse.json({
       configured: true,
       url: credentials.url,
       username: credentials.username,
+      healthy: health.healthy,
+      message: health.message,
     });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Could not retrieve WordPress configuration." }, { status: 500 });
