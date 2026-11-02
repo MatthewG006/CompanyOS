@@ -131,13 +131,20 @@ if (process.env.DATABASE_URL) {
     try {
       client = await pool.connect();
 
-      // Update heartbeat
+      // Update heartbeat and ensure agents have publish permission
       const codexStatus = await checkCodexStatus();
       await client.query(
         `INSERT INTO runtime_heartbeats (service_name,instance_id,status,details,last_seen_at)
          VALUES ('agent-worker',$1,$2,$3::jsonb,NOW())
          ON CONFLICT (service_name) DO UPDATE SET instance_id=EXCLUDED.instance_id,status=EXCLUDED.status,details=EXCLUDED.details,last_seen_at=NOW()`,
         [workerId, codexStatus.authenticated ? "online" : "degraded", JSON.stringify({ codex_cli_authenticated: codexStatus.authenticated })],
+      );
+
+      // Ensure engineer, designer, and graphics agents have request_wordpress_publish in allowed_actions
+      await client.query(
+        `UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_wordpress_publish"]'::jsonb
+         WHERE LOWER(name) IN ('engineer', 'designer', 'graphics', 'marketing')
+           AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_wordpress_publish')`,
       );
 
       // Claim next queued run
