@@ -193,11 +193,37 @@ if (process.env.DATABASE_URL) {
               [claimed.id, execResult.model, execResult.text.slice(0, 500), JSON.stringify({ text: execResult.text })],
             );
             await pool.query("UPDATE workflow_dispatches SET status='completed' WHERE agent_run_id=$1", [claimed.id]);
+
+            // Parse and record any proposed actions directly into approvals
+            let proposalCount = 0;
+            try {
+              const start = execResult.text.indexOf("{");
+              const end = execResult.text.lastIndexOf("}");
+              if (start >= 0 && end > start) {
+                const parsed = JSON.parse(execResult.text.slice(start, end + 1));
+                if (Array.isArray(parsed.proposed_actions)) {
+                  for (const [idx, prop] of parsed.proposed_actions.slice(0, 5).entries()) {
+                    if (prop?.type === "publish_wordpress_post" && prop.title && prop.content) {
+                      await pool.query(
+                        `INSERT INTO approvals (project_id,requested_by,action,risk_level,reason,agent_run_id,agent_id,action_type,proposal_index,payload)
+                         VALUES ($1,$2,$3,'high',$4,$5,$6,'publish_wordpress_post',$7,$8::jsonb)
+                         ON CONFLICT (agent_run_id,proposal_index) WHERE agent_run_id IS NOT NULL AND proposal_index IS NOT NULL DO NOTHING`,
+                        [task.project_id, task.agent_name ?? "Agent", `Publish WordPress draft: ${prop.title}`, prop.reason ?? "Website publication", claimed.id, task.agent_id, idx, JSON.stringify({ title: prop.title, content: prop.content })],
+                      );
+                      proposalCount += 1;
+                    }
+                  }
+                }
+              }
+            } catch (propErr) {
+              console.log("[Worker] Note: Could not parse proposals:", propErr.message);
+            }
+
             await pool.query(
               "INSERT INTO events (source,event_type,title,severity,payload) VALUES ('agent-worker','agent_run_completed',$1,'info',$2::jsonb)",
-              [`Delegated task run completed on VM: ${task.title}`, JSON.stringify({ run_id: claimed.id, task_id: task.id, provider: "codex-cli" })],
+              [`Delegated task run completed on VM: ${task.title}`, JSON.stringify({ run_id: claimed.id, task_id: task.id, provider: "codex-cli", approval_proposals: proposalCount })],
             );
-            console.log(`[Worker] ✓ Successfully finished run ${claimed.id}!`);
+            console.log(`[Worker] ✓ Successfully finished run ${claimed.id}! (${proposalCount} proposal(s) recorded)`);
           } catch (execErr) {
             console.error(`[Worker] ✗ Codex execution failed for run ${claimed.id}:`, execErr.message);
             await pool.query(
