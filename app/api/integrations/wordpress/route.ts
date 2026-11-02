@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { databaseAvailable, query } from "@/lib/db";
 import { encryptSecret } from "@/lib/secrets";
-import { getWordPressCredentials, checkWordPressHealth, createWordPressPost } from "@/lib/integrations/wordpress";
+import { getWordPressCredentials, checkWordPressHealth } from "@/lib/integrations/wordpress";
 
 export const dynamic = "force-dynamic";
 
