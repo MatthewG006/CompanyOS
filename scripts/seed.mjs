@@ -58,7 +58,13 @@ const agents = [
 ];
 const agentIds = {};
 for (const row of agents) {
-  const allowedActions = ["request_task_creation", "request_task_status_change", ...(row[0] === "Finance" ? ["request_financial_entry"] : []), ...(row[0] === "Sales" ? ["request_sales_lead"] : [])];
+  const allowedActions = [
+    "request_task_creation",
+    "request_task_status_change",
+    ...(row[0] === "Finance" ? ["request_financial_entry"] : []),
+    ...(row[0] === "Sales" ? ["request_sales_lead"] : []),
+    ...(["Engineer", "Designer", "Graphics", "Marketing"].includes(row[0]) ? ["request_wordpress_publish"] : []),
+  ];
   const result = await client.query(
     "INSERT INTO agents (name,role,department,provider,status,description,allowed_actions,memory_scope) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb) RETURNING id",
     [...row, JSON.stringify(allowedActions), JSON.stringify(["project", "tasks", "systems"])]

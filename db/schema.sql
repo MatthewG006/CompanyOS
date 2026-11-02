@@ -379,6 +379,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_leads_source_attention ON sales_lead
 UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_sales_lead"]'::jsonb
 WHERE LOWER(name)='sales' AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_sales_lead');
 
+-- Allow engineer and graphics agents to propose publishing to WordPress
+UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_wordpress_publish"]'::jsonb
+WHERE LOWER(name) IN ('engineer', 'designer', 'graphics', 'marketing') AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_wordpress_publish');
+
 CREATE TABLE IF NOT EXISTS contact_channel_preferences (
   contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
   channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp')),

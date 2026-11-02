@@ -9,7 +9,7 @@ function parseProposals(responseText: string): ProposedAction[] {
   if (start < 0 || end <= start) return [];
   try {
     const parsed = JSON.parse(responseText.slice(start, end + 1)) as { proposed_actions?: unknown };
-    return Array.isArray(parsed.proposed_actions) ? parsed.proposed_actions.slice(0, 3) : [];
+    return Array.isArray(parsed.proposed_actions) ? parsed.proposed_actions.slice(0, 5) : [];
   } catch {
     return [];
   }

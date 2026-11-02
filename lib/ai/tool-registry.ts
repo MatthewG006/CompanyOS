@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { sendGoogleEmail } from "@/lib/integrations/google";
 import { buildTaskPrompt } from "@/lib/ai/router";
+import { createWordPressPost } from "@/lib/integrations/wordpress";
 
 type AgentActionRequest = {
   reason: string;
@@ -15,6 +16,7 @@ type AgentActionRequest = {
   recipient?: string;
   subject?: string;
   body?: string;
+  content?: string;
 };
 
 type AgentTool = {
@@ -357,6 +359,38 @@ const sendEmailTool: AgentTool = {
   },
 };
 
+const publishWordPressPostTool: AgentTool = {
+  actionType: "publish_wordpress_post",
+  permission: "request_wordpress_publish",
+  parseProposal(value) {
+    const reason = boundedText(value.reason, 500);
+    const title = boundedText(value.title, 200);
+    const content = typeof value.content === "string" ? value.content.trim().slice(0, 50_000) : "";
+    return value.type === "publish_wordpress_post" && title && content && reason
+      ? { title, content, reason }
+      : null;
+  },
+  approvalPayload(value) {
+    return { title: value.title, content: value.content };
+  },
+  approvalLabel(value) {
+    return `Publish WordPress draft: ${value.title}`;
+  },
+  async execute(client, projectId, agentId, rawPayload, runId) {
+    const payload = rawPayload && typeof rawPayload === "object" ? rawPayload as Record<string, unknown> : {};
+    const title = boundedText(payload.title, 200);
+    const content = typeof payload.content === "string" ? payload.content.trim() : "";
+    if (!title || !content || !projectId) throw new Error("The approved WordPress post payload is invalid.");
+    const result = await createWordPressPost({ title, content, status: "draft" });
+    await client.query(
+      `INSERT INTO events (source,event_type,title,severity,project_id,payload)
+       VALUES ('wordpress','wordpress_post_created','WordPress draft created from approved agent action','info',$1,$2::jsonb)`,
+      [projectId, JSON.stringify({ post_id: result.id, link: result.link, agent_run_id: runId, agent_id: agentId, title })],
+    );
+    return String(result.id);
+  },
+};
+
 const registry = new Map<string, AgentTool>([
   [createTaskTool.actionType, createTaskTool],
   [updateTaskStatusTool.actionType, updateTaskStatusTool],
@@ -365,6 +399,7 @@ const registry = new Map<string, AgentTool>([
   [recordIncomeTool.actionType, recordIncomeTool],
   [createSalesLeadTool.actionType, createSalesLeadTool],
   [sendEmailTool.actionType, sendEmailTool],
+  [publishWordPressPostTool.actionType, publishWordPressPostTool],
 ]);
 
 export function getAgentTool(actionType: unknown) {

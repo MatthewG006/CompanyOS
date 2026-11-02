@@ -3,7 +3,7 @@ import { databaseAvailable, transaction } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-const actions = new Set(["request_task_creation", "request_task_status_change", "request_task_delegation", "request_financial_entry", "request_sales_lead", "request_email_outreach", "request_support_case_update"]);
+const actions = new Set(["request_task_creation", "request_task_status_change", "request_task_delegation", "request_financial_entry", "request_sales_lead", "request_email_outreach", "request_support_case_update", "request_wordpress_publish"]);
 const scopes = new Set(["project", "tasks", "systems", "sales", "support"]);
 const validProviders = new Set(["agnostic", "auto", "chatgpt-free", "claude-free", "codex", "codex-cli", "ollama", "openai", "anthropic"]);
 
