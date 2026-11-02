@@ -6,6 +6,7 @@ import { buildTaskPrompt, configuredProviders, getCodexCliStatus, handoffProvide
 import { executeAgent } from "@/lib/ai/executor";
 import { providerRegistry } from "@/lib/ai/provider-registry";
 import { DispatchError, executeWithFallback, planDispatch } from "@/lib/ai/dispatch-plan";
+import { capNotice, localCapStatus, localRunsPerHour } from "@/lib/ai/local-cap";
 import { normalizeProviderList, normalizeTaskCapabilities, normalizeTaskConstraints, type TaskSpec } from "@/lib/ai/task-spec";
 
 export const dynamic = "force-dynamic";
@@ -32,11 +33,14 @@ export async function GET(request: Request) {
   const countResult = await query<{ status: string; count: string }>("SELECT status,COUNT(*)::text AS count FROM agent_runs GROUP BY status");
   const run_counts = Object.fromEntries(countResult.rows.map((row) => [row.status, Number(row.count)]));
   const codex_cli = await getCodexCliStatus();
+  const local_cap = await localCapStatus(query, localRunsPerHour(process.env.AGENT_LOCAL_MAX_RUNS_PER_HOUR));
   const workerResult = await query<{ status: string; details: { codex_cli_authenticated?: boolean }; last_seen_at: string; online: boolean }>(
     `SELECT status,details,last_seen_at::text,(last_seen_at > NOW()-INTERVAL '3 minutes') AS online
      FROM runtime_heartbeats WHERE service_name='agent-worker'`,
   );
-  return NextResponse.json({ runs: runs.rows, run_counts, providers: { ...configuredProviders(), "codex-cli": codex_cli.authenticated }, provider_status: { "codex-cli": codex_cli }, agent_worker: workerResult.rows[0] ?? null, auth_required: process.env.NODE_ENV !== "production" && Boolean(process.env.COMPANYOS_ADMIN_TOKEN) });
+  const worker = workerResult.rows[0] ?? null;
+  const isCodexAvailable = codex_cli.authenticated || (Boolean(worker?.online) && Boolean(worker?.details?.codex_cli_authenticated));
+  return NextResponse.json({ runs: runs.rows, run_counts, local_cap, providers: { ...configuredProviders(), "codex-cli": isCodexAvailable }, provider_status: { "codex-cli": { ...codex_cli, authenticated: isCodexAvailable } }, agent_worker: worker, auth_required: process.env.NODE_ENV !== "production" && Boolean(process.env.COMPANYOS_ADMIN_TOKEN) });
 }
 
 type RetryOutcome =
@@ -59,7 +63,7 @@ async function queueFailedCodexRetry(runId: string): Promise<RetryOutcome> {
       FROM agent_runs r LEFT JOIN tasks t ON t.id=r.task_id WHERE r.id=$1 FOR UPDATE OF r`, [runId]);
     const source = sourceResult.rows[0];
     if (!source) return { ok: false, error: "Agent run not found.", statusCode: 404 };
-    if (source.provider !== "codex-cli") return { ok: false, error: "Only failed Codex CLI runs can be retried in the queue.", statusCode: 400 };
+    if (source.provider !== "codex-cli" && source.provider !== "ollama" && source.provider !== "auto") return { ok: false, error: "Only failed automated runs (Codex CLI, Ollama, auto) can be retried in the queue.", statusCode: 400 };
     if (source.status !== "failed") return { ok: false, error: "Only failed runs can be retried.", statusCode: 409 };
     if (!source.task_id || !source.agent_id || !source.task_status || source.task_status === "done") {
       return { ok: false, error: "The failed run's task is missing, complete, or unassigned.", statusCode: 409 };
@@ -87,10 +91,10 @@ async function queueFailedCodexRetry(runId: string): Promise<RetryOutcome> {
     };
     const inserted = await client.query<{ id: string; status: string }>(
       `INSERT INTO agent_runs (agent_id,task_id,provider,status,summary,input,retry_of_run_id)
-       VALUES ($1,$2,'codex-cli','queued','Queued retry after failed Codex CLI run.',$3::jsonb,$4)
+       VALUES ($1,$2,$5,'queued','Queued retry after failed agent run.',$3::jsonb,$4)
        ON CONFLICT (retry_of_run_id) WHERE retry_of_run_id IS NOT NULL DO NOTHING
        RETURNING id,status`,
-      [source.agent_id, source.task_id, JSON.stringify(retryInput), source.id],
+      [source.agent_id, source.task_id, JSON.stringify(retryInput), source.id, source.provider],
     );
     const retry = inserted.rows[0];
     if (!retry) {
@@ -105,7 +109,7 @@ async function queueFailedCodexRetry(runId: string): Promise<RetryOutcome> {
 
     await client.query(
       `INSERT INTO events (source,event_type,title,severity,payload)
-       VALUES ('agent-router','agent_run_retried','Failed Codex run queued for retry','info',$1::jsonb)`,
+       VALUES ('agent-router','agent_run_retried','Failed agent run queued for retry','info',$1::jsonb)`,
       [JSON.stringify({ previous_run_id: source.id, retry_run_id: retry.id, task_id: source.task_id })],
     );
     await client.query("UPDATE workflow_dispatches SET agent_run_id=$2,status='queued' WHERE agent_run_id=$1", [source.id, retry.id]);
@@ -165,20 +169,29 @@ export async function POST(request: Request) {
     };
     const manualChoice = typeof body?.manual_provider === "string" && (handoffProviders as readonly string[]).includes(body.manual_provider) ? body.manual_provider : undefined;
     const codex = await getCodexCliStatus();
+    const workerCheck = await query<{ details: { codex_cli_authenticated?: boolean }; online: boolean }>(
+      `SELECT details,(last_seen_at > NOW()-INTERVAL '3 minutes') AS online
+       FROM runtime_heartbeats WHERE service_name='agent-worker'`,
+    );
+    const workerRow = workerCheck.rows[0];
+    const codexCliUsable = codex.authenticated || (Boolean(workerRow?.online) && Boolean(workerRow?.details?.codex_cli_authenticated));
+
+    const localCap = await localCapStatus(query, localRunsPerHour(process.env.AGENT_LOCAL_MAX_RUNS_PER_HOUR));
     const plan = planDispatch({
       requested: provider,
       automaticOnly: false,
       allowBillable: process.env.AI_AUTO_ALLOW_BILLABLE === "true",
-      codexAuthenticated: codex.authenticated,
+      codexAuthenticated: codexCliUsable,
       manualProvider: manualChoice,
+      unavailable: localCap.capped ? ["ollama"] : [],
     }, providerRegistry(), taskSpec);
     if (!plan.automatic.length && !plan.manual) {
       const message = provider === "codex-cli"
-        ? (codex.authenticated ? "Codex CLI does not satisfy this task's execution requirements." : codex.message)
+        ? (codexCliUsable ? "Codex CLI does not satisfy this task's execution requirements." : codex.message)
         : provider === "auto"
           ? "No configured AI provider satisfies this task's capabilities, sensitivity, cost, and duration constraints."
           : `${provider} is unavailable or does not satisfy this task's execution requirements.`;
-      return NextResponse.json({ error: message, provider_status: { "codex-cli": codex }, task_requirements: taskSpec }, { status: 503 });
+      return NextResponse.json({ error: message + capNotice(localCap), provider_status: { "codex-cli": { ...codex, authenticated: codexCliUsable } }, local_cap: localCap, task_requirements: taskSpec }, { status: 503 });
     }
 
     const memory = await loadAgentMemory(task.project_id, task.agent_memory_scope, task.id);
@@ -205,6 +218,22 @@ export async function POST(request: Request) {
     }
 
     if (!plan.automatic.length && plan.manual) return await startManualHandoff(null, plan.manual, []);
+
+    // If local codex binary is NOT installed on this web host (e.g. Vercel), but the VM agent-worker IS online with Codex CLI authenticated:
+    // Queue the run for the worker to claim and execute on the VM!
+    if (!codex.authenticated && codexCliUsable && (plan.automatic[0] === "codex-cli" || provider === "codex-cli")) {
+      const queuedRun = await query<{ id: string }>(
+        `INSERT INTO agent_runs (agent_id,task_id,provider,status,summary,input)
+         VALUES ($1,$2,'codex-cli','queued','Queued for remote Codex CLI worker on VM.',$3::jsonb) RETURNING id`,
+        [task.agent_id, task.id, JSON.stringify(input)],
+      );
+      const queuedId = queuedRun.rows[0].id;
+      await query(
+        "INSERT INTO events (source,event_type,title,severity,payload) VALUES ('agent-router','agent_run_queued',$1,'info',$2::jsonb)",
+        [`Task queued for VM worker: ${task.title}`, JSON.stringify({ run_id: queuedId, task_id: task.id, provider: "codex-cli" })],
+      );
+      return NextResponse.json({ ok: true, run_id: queuedId, status: "queued", provider: "codex-cli" });
+    }
 
     const inserted = await query<{ id: string }>(`INSERT INTO agent_runs (agent_id,task_id,provider,status,summary,input,started_at)
       VALUES ($1,$2,$3,'running','Model task started.',$4::jsonb,NOW()) RETURNING id`, [task.agent_id, task.id, plan.automatic[0], JSON.stringify(input)]);

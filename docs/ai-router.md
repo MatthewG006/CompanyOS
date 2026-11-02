@@ -32,7 +32,7 @@ To process runs continuously, start `npm run agents:worker` in a second terminal
 ## Run lifecycle
 
 - API-backed or Codex CLI run: `running` → `completed` or `failed`
-- Manual handoff: `awaiting_external` → `completed`
+- Manual handoff: `awaiting_external` → `completed`, or `expired` if no response is pasted in time (see below)
 - Approved delegation: task + `queued` run → `running` → `completed` or `failed`
 - New Gmail follow-up: task + `queued` run → `running` → `completed` or `failed`
 - Every run stores its bounded task input, selected provider/model, result or error, and timestamps in `agent_runs`.
@@ -73,3 +73,36 @@ Tasks now persist an execution contract in PostgreSQL:
 - `preferred_providers` / `fallback_providers`: bounded provider preferences used when automatic routing is selected
 
 The router evaluates these requirements before selecting a provider. Confidential tasks are limited to local execution or the isolated Codex CLI. A provider that lacks a required capability is never selected merely because it has a higher priority. Existing tasks default to reasoning plus internal data sensitivity, so this migration does not change their normal routing behavior.
+
+## Manual handoff expiry
+
+A manual handoff that never receives a pasted response would otherwise sit in `awaiting_external` forever. The agent worker endpoint marks any such run `expired` once it is older than `AGENT_HANDOFF_EXPIRY_HOURS` (default 48; whole hours from 1 to 720, invalid values use the default). Expiry records a `agent_run_expired` Company Brain event and stores an explanatory note in the run's `error` field. Because the paste-back endpoint only accepts `awaiting_external` runs, a late response is rejected; the owner starts a new run instead. Expiry runs whenever the worker polls (`npm run agents:worker` or **Run next queued task**), so an offline worker does not expire anything. The AI Workforce page shows an **Expired handoffs** count.
+
+## Local model run cap
+
+Automatic routing and the worker would otherwise send every eligible task to Ollama with no limit, which can monopolise a local machine during a busy agent loop. CompanyOS caps local runs: once `AGENT_LOCAL_MAX_RUNS_PER_HOUR` Ollama runs (default 30; `0` disables the cap; invalid values use the default) have started in the last hour, Ollama is skipped by the planner until older runs age out of the one-hour window.
+
+- **Auto runs** fall through to the next provider, then to manual handoff.
+- **Queued runs** are not claimed when nothing else can run them; the worker returns HTTP 503 explaining the limit. If a claimed run turns out to need Ollama, it fails with a note that the limit was reached, and can be retried.
+- **Explicit `ollama` requests** return HTTP 503 with the usage; they are never redirected silently.
+- Runs count whether they completed, failed or are still running, because the model did the work. Queued worker runs record `ollama` only when they finish, so in-flight runs are not counted and several workers can briefly exceed the cap.
+- The AI Workforce page shows **Local runs (1h)** as `used/limit` and marks it paused when the cap is reached.
+
+## Database-backed tests
+
+`npm test` runs without a database; tests that need one are skipped. To run them, migrate a local PostgreSQL and set `DATABASE_URL`:
+
+```
+npm run db:migrate
+DATABASE_URL=postgres://companyos:companyos_dev_password@localhost:5432/companyos npm test
+```
+
+The database tests wrap their writes in a transaction that is rolled back, so they leave no rows behind.
+
+## Route tests
+
+`npm run test:routes` builds the app and runs the production server (`next start`) against a **throwaway database** and an in-process fake Ollama, so the real proxy, token auth, run API and worker are exercised without any real model, paid API or Codex CLI. It covers: auth, local-model execution and routing records, fallback to manual handoff, paste-back (once only, never after expiry), the local run cap for interactive and queued runs, and handoff expiry through the worker poll.
+
+- Needs `DATABASE_URL` pointing at a PostgreSQL server where the role can `CREATE DATABASE`. Each run creates `companyos_routes_<random>`, migrates it and drops it afterwards. It never reads or writes the database in `DATABASE_URL` itself, because the worker endpoint also dispatches sales reminders and outbound email.
+- The tests blank the OpenAI/Anthropic keys and point `CODEX_CLI_PATH` at a nonexistent file for the server they start.
+- Without `DATABASE_URL`, without a build, or without `CREATE DATABASE` rights the tests are skipped with a reason. `npm test` does not run them.

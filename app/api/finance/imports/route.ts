@@ -174,6 +174,46 @@ export async function POST(request: Request) {
   }
 }
 
+export async function PUT(request: Request) {
+  if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  try {
+    const body = await request.json();
+    const batchId = typeof body?.batch_id === "string" ? body.batch_id : "";
+    if (!uuidPattern.test(batchId)) return NextResponse.json({ error: "Valid batch_id is required." }, { status: 400 });
+
+    const result = await transaction(async (client) => {
+      const pendingRows = await client.query<{ id: string; transaction_date: string; direction: "income" | "expense"; amount_cents: string; description: string; fingerprint: string }>(
+        `SELECT id, transaction_date::text, direction, amount_cents::text, description, fingerprint
+         FROM financial_import_rows WHERE batch_id=$1 AND status='pending'`,
+        [batchId]
+      );
+
+      let matchedCount = 0;
+      for (const row of pendingRows.rows) {
+        const possibleMatch = await client.query(
+          `SELECT id FROM financial_transactions WHERE source_fingerprint=$1 OR
+             (transaction_date=$2 AND direction=$3 AND amount_cents=$4 AND LOWER(REGEXP_REPLACE(TRIM(description),'\\s+',' ','g'))=LOWER($5)) LIMIT 1`,
+          [row.fingerprint, row.transaction_date, row.direction, row.amount_cents, row.description.replace(/\s+/g, " ").trim()]
+        );
+        if (possibleMatch.rows[0]) {
+          await client.query(
+            "UPDATE financial_import_rows SET status='duplicate', duplicate_note='Auto-reconciled with an existing transaction.', updated_at=NOW() WHERE id=$1",
+            [row.id]
+          );
+          matchedCount += 1;
+        }
+      }
+      await updateBatchStatus(client, batchId);
+      return { total_pending: pendingRows.rows.length, reconciled_duplicates: matchedCount };
+    });
+
+    return NextResponse.json({ ok: true, ...result });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not reconcile import batch." }, { status: 400 });
+  }
+}
+
 export async function PATCH(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });

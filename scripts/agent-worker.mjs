@@ -1,7 +1,13 @@
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { resolve, join } from "node:path";
+import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import pg from "pg";
 
+const { Pool } = pg;
+
+// Read .env.local if present
 const envFile = await readFile(resolve(process.cwd(), ".env.local"), "utf8").catch(() => "");
 for (const line of envFile.split(/\r?\n/)) {
   const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
@@ -10,40 +16,232 @@ for (const line of envFile.split(/\r?\n/)) {
   process.env[match[1]] = value;
 }
 
-const baseUrl = (process.env.APP_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
 const interval = Math.min(60_000, Math.max(1_000, Number(process.env.COMPANYOS_AGENT_WORKER_INTERVAL_MS) || 3_000));
-const headers = { "Content-Type": "application/json" };
-if (process.env.COMPANYOS_ADMIN_TOKEN) headers.Authorization = `Bearer ${process.env.COMPANYOS_ADMIN_TOKEN}`;
-headers["x-companyos-agent-worker-id"] = randomUUID();
 let stopping = false;
-
 process.on("SIGINT", () => { stopping = true; });
 process.on("SIGTERM", () => { stopping = true; });
 
-console.log(`CompanyOS agent worker polling ${baseUrl} every ${interval}ms.`);
-while (!stopping) {
+// Check Codex CLI status
+async function checkCodexStatus() {
+  return new Promise((resolveStatus) => {
+    try {
+      const child = spawn("codex", ["login", "status"], { windowsHide: true, stdio: "ignore" });
+      child.on("error", () => resolveStatus({ installed: false, authenticated: false }));
+      child.on("close", (code) => resolveStatus({ installed: true, authenticated: code === 0 }));
+    } catch {
+      resolveStatus({ installed: false, authenticated: false });
+    }
+  });
+}
+
+// Execute prompt via local Codex CLI
+async function runCodexPrompt(prompt) {
+  const workspace = await mkdtemp(join(tmpdir(), "companyos-worker-"));
   try {
-    const response = await fetch(`${baseUrl}/api/agent-runs/worker`, {
-      method: "POST",
-      headers,
-      body: "{}",
-      signal: AbortSignal.timeout(180_000),
+    return await new Promise((resolveRun, rejectRun) => {
+      const args = [
+        "exec", "--json", "--ephemeral", "--ignore-user-config",
+        "--cd", workspace, "--skip-git-repo-check",
+        "-c", 'approval_policy="never"',
+        "-c", 'default_permissions="companyos_isolated"',
+        "-c", 'permissions.companyos_isolated.filesystem.":root"="deny"',
+        "-c", 'permissions.companyos_isolated.filesystem.":minimal"="read"',
+        "-c", 'permissions.companyos_isolated.filesystem.":workspace_roots"."."="read"',
+        "-c", "permissions.companyos_isolated.network.enabled=false",
+        "-c", 'shell_environment_policy.inherit="none"',
+        "-",
+      ];
+      const child = spawn("codex", args, { cwd: workspace, windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+      let stdout = "";
+      let overflow = false;
+      let timedOut = false;
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        child.kill();
+      }, 120_000);
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        if (stdout.length + chunk.length > 300_000) {
+          overflow = true;
+          child.kill();
+          return;
+        }
+        stdout += chunk;
+      });
+      child.on("error", (err) => {
+        clearTimeout(timeout);
+        rejectRun(new Error(`Failed to start Codex CLI: ${err.message}`));
+      });
+      child.on("close", (code) => {
+        clearTimeout(timeout);
+        if (timedOut) return rejectRun(new Error("Codex CLI timed out after 120s."));
+        if (overflow) return rejectRun(new Error("Codex CLI output exceeded limit."));
+        if (code !== 0) return rejectRun(new Error(`Codex CLI exited with code ${code}.`));
+        const messages = [];
+        for (const line of stdout.split(/\r?\n/)) {
+          try {
+            const event = JSON.parse(line);
+            if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") {
+              messages.push(event.item.text);
+            }
+          } catch {}
+        }
+        const text = messages.at(-1);
+        if (!text) return rejectRun(new Error("Codex CLI completed without a text response."));
+        resolveRun({ text, model: "Codex CLI · isolated" });
+      });
+      child.stdin.end(prompt);
     });
-    if (response.status === 401 || response.status === 403) {
-      console.error(`Agent worker authorization failed (HTTP ${response.status}). Check COMPANYOS_ADMIN_TOKEN.`);
-      process.exitCode = 1;
-      break;
-    }
-    if (!response.ok) {
-      console.error(`Agent worker endpoint returned HTTP ${response.status}.`);
-    } else {
-      const result = await response.json();
-      if (result.worked && result.kind === "outbound_email") console.log(`Outbound email ${result.outbound_message_id}: ${result.status}.`);
-      else if (result.worked) console.log(`Run ${result.run_id}: ${result.status}${result.approval_proposals ? `; ${result.approval_proposals} approval proposal(s)` : ""}.`);
-    }
-  } catch (error) {
-    console.error(`Agent worker could not reach CompanyOS: ${error instanceof Error ? error.message : "connection error"}`);
+  } finally {
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
   }
-  if (!stopping) await new Promise((resolveDelay) => setTimeout(resolveDelay, interval));
+}
+
+// Database direct mode
+if (process.env.DATABASE_URL) {
+  let dbUrl = process.env.DATABASE_URL;
+  const isLocal = dbUrl.includes("localhost") || dbUrl.includes("127.0.0.1");
+  const isSslDisabled = dbUrl.includes("sslmode=disable");
+  const useSsl = (!isLocal && !isSslDisabled) || dbUrl.includes("supabase") || dbUrl.includes("sslmode=") || dbUrl.includes("render.com") || dbUrl.includes("neon.tech");
+  dbUrl = dbUrl.replace(/([?&])sslmode=[^&]*(&|$)/, "$1").replace(/[?&]$/, "");
+
+  const pool = new Pool({
+    connectionString: dbUrl,
+    max: 5,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 5_000,
+    ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+  });
+
+  const workerId = randomUUID();
+  console.log(`CompanyOS autonomous database worker started (Worker ID: ${workerId}).`);
+  console.log(`Polling Supabase / PostgreSQL every ${interval}ms for queued agent runs...`);
+
+  while (!stopping) {
+    let client = null;
+    try {
+      client = await pool.connect();
+
+      // Update heartbeat
+      const codexStatus = await checkCodexStatus();
+      await client.query(
+        `INSERT INTO runtime_heartbeats (service_name,instance_id,status,details,last_seen_at)
+         VALUES ('agent-worker',$1,$2,$3::jsonb,NOW())
+         ON CONFLICT (service_name) DO UPDATE SET instance_id=EXCLUDED.instance_id,status=EXCLUDED.status,details=EXCLUDED.details,last_seen_at=NOW()`,
+        [workerId, codexStatus.authenticated ? "online" : "degraded", JSON.stringify({ codex_cli_authenticated: codexStatus.authenticated })],
+      );
+
+      // Claim next queued run
+      await client.query("BEGIN");
+      const claimResult = await client.query(
+        `WITH candidate AS (
+           SELECT id FROM agent_runs WHERE status='queued' AND provider IN ('codex-cli', 'auto', 'agnostic')
+           ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
+         )
+         UPDATE agent_runs r SET status='running',summary='Worker running on VM.',started_at=NOW(),error=NULL
+         FROM candidate c WHERE r.id=c.id RETURNING r.id,r.task_id,r.input`,
+      );
+      const claimed = claimResult.rows[0] ?? null;
+      if (claimed) {
+        await client.query("UPDATE workflow_dispatches SET status='running' WHERE agent_run_id=$1", [claimed.id]);
+        await client.query("COMMIT");
+
+        console.log(`[Worker] Claimed run ${claimed.id} for task ${claimed.task_id}...`);
+
+        // Get task and agent details
+        const taskRes = await pool.query(
+          `SELECT t.id,t.title,t.priority,t.status,t.project_id,
+             p.name AS project_name,a.id AS agent_id,a.name AS agent_name,a.role AS agent_role,a.mission AS agent_mission,
+             a.description AS agent_description,a.memory_scope AS agent_memory_scope,a.allowed_actions AS agent_allowed_actions,manager.name AS agent_manager_name,
+             COALESCE((SELECT json_agg(json_build_object('id',child.id,'name',child.name,'role',child.role)) FROM agents child WHERE child.reports_to=a.id),'[]'::json) AS agent_direct_reports
+           FROM tasks t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN agents a ON a.id=t.agent_id
+           LEFT JOIN agents manager ON manager.id=a.reports_to WHERE t.id=$1`, [claimed.task_id],
+        );
+        const task = taskRes.rows[0];
+
+        if (!task || task.status === "done" || !task.agent_id) {
+          await pool.query(
+            "UPDATE agent_runs SET status='failed',error='Queued task is missing, complete, or unassigned.',summary='Task could not start.',completed_at=NOW() WHERE id=$1",
+            [claimed.id],
+          );
+          console.log(`[Worker] Run ${claimed.id} failed: task missing or complete.`);
+        } else {
+          // Construct prompt, preferring existing input prompt if available
+          const role = task.agent_name ? `${task.agent_name}${task.agent_role ? ` (${task.agent_role})` : ""}` : "CompanyOS task agent";
+          const prompt = claimed.input?.prompt || [
+            `You are acting as ${role} for CompanyOS.`,
+            task.agent_mission ? `Mission: ${task.agent_mission}` : "",
+            `Project: ${task.project_name ?? "Company-wide"}`,
+            `Task: ${task.title}`,
+            `Return one JSON object: {"summary":"...","work_completed":[],"evidence":[],"risks":[],"next_actions":[],"proposed_actions":[]}`,
+          ].filter(Boolean).join("\n");
+
+          try {
+            console.log(`[Worker] Executing Codex CLI for task: "${task.title}"...`);
+            const execResult = await runCodexPrompt(prompt);
+            await pool.query(
+              "UPDATE agent_runs SET provider='codex-cli',model=$2,status='completed',summary=$3,result=$4::jsonb,completed_at=NOW() WHERE id=$1",
+              [claimed.id, execResult.model, execResult.text.slice(0, 500), JSON.stringify({ text: execResult.text })],
+            );
+            await pool.query("UPDATE workflow_dispatches SET status='completed' WHERE agent_run_id=$1", [claimed.id]);
+            await pool.query(
+              "INSERT INTO events (source,event_type,title,severity,payload) VALUES ('agent-worker','agent_run_completed',$1,'info',$2::jsonb)",
+              [`Delegated task run completed on VM: ${task.title}`, JSON.stringify({ run_id: claimed.id, task_id: task.id, provider: "codex-cli" })],
+            );
+            console.log(`[Worker] ✓ Successfully finished run ${claimed.id}!`);
+          } catch (execErr) {
+            console.error(`[Worker] ✗ Codex execution failed for run ${claimed.id}:`, execErr.message);
+            await pool.query(
+              "UPDATE agent_runs SET status='failed',error=$2,summary='Codex execution failed on VM.',completed_at=NOW() WHERE id=$1",
+              [claimed.id, execErr.message.slice(0, 400)],
+            );
+            await pool.query("UPDATE workflow_dispatches SET status='failed' WHERE agent_run_id=$1", [claimed.id]);
+          }
+        }
+      } else {
+        await client.query("ROLLBACK");
+      }
+    } catch (err) {
+      if (client) await client.query("ROLLBACK").catch(() => {});
+      console.error(`[Worker Error]: ${err.message}`);
+    } finally {
+      if (client) client.release();
+    }
+    if (!stopping) await new Promise((resolveDelay) => setTimeout(resolveDelay, interval));
+  }
+  await pool.end();
+} else {
+  // HTTP polling fallback mode
+  const baseUrl = (process.env.APP_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
+  const headers = { "Content-Type": "application/json" };
+  if (process.env.COMPANYOS_ADMIN_TOKEN) headers.Authorization = `Bearer ${process.env.COMPANYOS_ADMIN_TOKEN}`;
+  headers["x-companyos-agent-worker-id"] = randomUUID();
+
+  console.log(`CompanyOS agent worker polling ${baseUrl} every ${interval}ms.`);
+  while (!stopping) {
+    try {
+      const response = await fetch(`${baseUrl}/api/agent-runs/worker`, {
+        method: "POST",
+        headers,
+        body: "{}",
+        signal: AbortSignal.timeout(180_000),
+      });
+      if (response.status === 401 || response.status === 403) {
+        console.error(`Agent worker authorization failed (HTTP ${response.status}). Check COMPANYOS_ADMIN_TOKEN.`);
+        process.exitCode = 1;
+        break;
+      }
+      if (!response.ok) {
+        console.error(`Agent worker endpoint returned HTTP ${response.status}.`);
+      } else {
+        const result = await response.json();
+        if (result.worked && result.kind === "outbound_email") console.log(`Outbound email ${result.outbound_message_id}: ${result.status}.`);
+        else if (result.worked) console.log(`Run ${result.run_id}: ${result.status}${result.approval_proposals ? `; ${result.approval_proposals} approval proposal(s)` : ""}.`);
+      }
+    } catch (error) {
+      console.error(`Agent worker could not reach CompanyOS: ${error instanceof Error ? error.message : "connection error"}`);
+    }
+    if (!stopping) await new Promise((resolveDelay) => setTimeout(resolveDelay, interval));
+  }
 }
 console.log("CompanyOS agent worker stopped.");

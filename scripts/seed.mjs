@@ -1,4 +1,6 @@
-import { loadEnvConfig } from "@next/env";
+import nextEnv from "@next/env";
+
+const { loadEnvConfig } = nextEnv;
 import pg from "pg";
 
 loadEnvConfig(process.cwd());
@@ -79,6 +81,9 @@ const tasks = [
   [projectIds["sky-mountain-cloud"], agentIds.Engineer, "Document free vs premium account provisioning", "normal", "todo"],
   [projectIds["plenty-of-plants"], agentIds.Research, "Create first retention-analysis experiment brief", "normal", "in_progress"],
   [projectIds["sky-mountain-graphics"], agentIds.Sales, "Build local-business prospecting workflow", "high", "in_progress"],
+  [projectIds["sky-mountain-graphics"], agentIds.Engineer, "Develop Sky Mountain Graphics website landing page and service showcase", "high", "todo"],
+  [projectIds["sky-mountain-graphics"], agentIds.Engineer, "Setup client website design intake form and portfolio gallery", "normal", "todo"],
+  [projectIds["sky-mountain-graphics"], agentIds.Marketing, "Draft web design service offerings and branding package copy", "normal", "todo"],
 ];
 for (const row of tasks) {
   await client.query(

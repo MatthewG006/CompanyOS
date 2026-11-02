@@ -6,9 +6,13 @@ import type { ProviderDefinition, ProviderId } from "../lib/ai/provider-registry
 const def = (id: ProviderId, mode: ProviderDefinition["mode"], priority: number, configured = true, capabilities: ProviderDefinition["capabilities"] = { reasoning: true }): ProviderDefinition => ({
   id, mode, priority, capabilities, isConfigured: () => configured, maxDurationMs: mode === "cli" ? 120_000 : mode === "manual_handoff" ? 0 : 60_000,
 });
+// Mirrors the capabilities declared in lib/ai/provider-registry.ts.
+const basic = { reasoning: true, coding: true };
+const hosted = { reasoning: true, coding: true, web: true };
 const providers = [
-  def("codex-cli", "cli", 100), def("openai", "api", 80), def("anthropic", "api", 75, false), def("ollama", "local", 70),
-  def("chatgpt-free", "manual_handoff", 60), def("claude-free", "manual_handoff", 55), def("codex", "manual_handoff", 50),
+  def("codex-cli", "cli", 100, true, { reasoning: true, coding: true, filesystem: true, shell: true }),
+  def("openai", "api", 80, true, hosted), def("anthropic", "api", 75, false, hosted), def("ollama", "local", 70, true, basic),
+  def("chatgpt-free", "manual_handoff", 60, true, hosted), def("claude-free", "manual_handoff", 55, true, hosted), def("codex", "manual_handoff", 50, true, basic),
 ];
 const base: DispatchPolicy = { requested: "auto", automaticOnly: false, allowBillable: false, codexAuthenticated: true };
 
@@ -89,5 +93,16 @@ test("task provider preferences influence automatic ordering", () => {
     context: { memoryScopes: [] },
     execution: { preferredProviders: ["ollama"] },
   };
-  assert.equal(planDispatch({ ...base, codexAuthenticated: false }, providers, task).automatic[0], "ollama");
+  assert.deepEqual(planDispatch(base, providers, task).automatic, ["ollama", "codex-cli"]);
+  assert.deepEqual(planDispatch(base, providers, { ...task, execution: {} }).automatic, ["codex-cli", "ollama"]);
+});
+
+test("unavailable providers are skipped, so auto routing and queued runs avoid a capped local model", () => {
+  assert.deepEqual(planDispatch({ ...base, unavailable: ["ollama"] }, providers).automatic, ["codex-cli"]);
+  assert.deepEqual(planDispatch({ ...base, codexAuthenticated: false, unavailable: ["ollama"] }, providers).automatic, []);
+  // Interactive auto runs then fall through to a manual handoff; queued runs get nothing.
+  assert.equal(planDispatch({ ...base, codexAuthenticated: false, unavailable: ["ollama"] }, providers).manual, "chatgpt-free");
+  assert.equal(planDispatch({ ...base, codexAuthenticated: false, automaticOnly: true, unavailable: ["ollama"] }, providers).manual, null);
+  // An explicit request for the capped provider is not silently redirected.
+  assert.deepEqual(planDispatch({ ...base, requested: "ollama", unavailable: ["ollama"] }, providers), { automatic: [], manual: null });
 });

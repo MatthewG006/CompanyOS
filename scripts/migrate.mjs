@@ -1,4 +1,6 @@
-import { loadEnvConfig } from "@next/env";
+import nextEnv from "@next/env";
+
+const { loadEnvConfig } = nextEnv;
 import fs from "node:fs/promises";
 import pg from "pg";
 

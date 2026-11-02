@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { databaseAvailable, query, transaction } from "@/lib/db";
+import { loadAgentMemory } from "@/lib/ai/memory";
+import { buildTaskPrompt } from "@/lib/ai/router";
 
 export const dynamic = "force-dynamic";
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const statuses = new Set(["open", "in_progress", "waiting", "resolved", "closed"]);
 const priorities = new Set(["low", "normal", "high", "critical"]);
+const manualProviders = new Set(["chatgpt-free", "claude-free", "codex"]);
 
 function authorized(request: Request) {
   if (process.env.NODE_ENV === "production" && request.headers.get("x-companyos-owner-authenticated") === "true") return true;
@@ -55,23 +58,81 @@ export async function POST(request: Request) {
         `INSERT INTO support_cases (project_id,contact_id,title,description,priority)
          VALUES ($1,$2,$3,$4,$5) RETURNING id`, [projectId, contactId, title, description, priority],
       );
-      const supportAgent = await client.query<{ id: string }>("SELECT id FROM agents WHERE LOWER(name)='support' LIMIT 1");
+      const supportAgent = await client.query<{
+        id: string;
+        name: string;
+        role: string | null;
+        mission: string | null;
+        description: string | null;
+        provider: string;
+        memory_scope: string[];
+        allowed_actions: string[];
+      }>("SELECT id,name,role,mission,description,provider,memory_scope,allowed_actions FROM agents WHERE LOWER(name)='support' LIMIT 1");
+      const agent = supportAgent.rows[0];
       const task = await client.query<{ id: string }>(
         `INSERT INTO tasks (project_id,agent_id,title,priority,status)
          VALUES ($1,$2,$3,$4,'todo') RETURNING id`,
-        [projectId, supportAgent.rows[0]?.id ?? null, `Triage support case: ${title}`.slice(0, 200), priority],
+        [projectId, agent?.id ?? null, `Triage support case: ${title}`.slice(0, 200), priority],
       );
       await client.query("UPDATE support_cases SET task_id=$2 WHERE id=$1", [inserted.rows[0].id, task.rows[0].id]);
       let agentRunId: string | null = null;
-      if (supportAgent.rows[0]) {
-        const run = await client.query<{ id: string }>(
-          `INSERT INTO agent_runs (agent_id,task_id,provider,status,summary,input)
-           VALUES ($1,$2,'codex-cli','queued','Queued by Support case workflow.',$3::jsonb) RETURNING id`,
-          [supportAgent.rows[0].id, task.rows[0].id, JSON.stringify({ source: "support-case-workflow", workflow_context: {
-            category: "support_case", support_case_id: inserted.rows[0].id,
-          } })],
-        );
-        agentRunId = run.rows[0].id;
+      if (agent) {
+        const isManual = manualProviders.has(agent.provider);
+        const workflowContext = {
+          category: "support_case",
+          support_case_id: inserted.rows[0].id,
+        };
+        if (isManual) {
+          const baseMemory = await loadAgentMemory(projectId, agent.memory_scope, task.rows[0].id);
+          const memory = {
+            ...baseMemory,
+            support_case: {
+              case_id: inserted.rows[0].id,
+              title,
+              description,
+              priority,
+              status: "open",
+              contact_name: null,
+              organization: null,
+            },
+          };
+          const prompt = buildTaskPrompt({
+            title: `Triage support case: ${title}`.slice(0, 200),
+            priority,
+            project_name: null,
+            agent_name: agent.name,
+            agent_manager_name: null,
+            agent_role: agent.role,
+            agent_mission: agent.mission,
+            agent_description: agent.description,
+            agent_memory_scope: agent.memory_scope,
+            agent_allowed_actions: agent.allowed_actions,
+          }, memory);
+          const run = await client.query<{ id: string }>(
+            `INSERT INTO agent_runs (agent_id,task_id,provider,model,status,summary,input)
+             VALUES ($1,$2,$3,'manual handoff','awaiting_external','Prompt ready for manual provider handoff.',$4::jsonb) RETURNING id`,
+            [agent.id, task.rows[0].id, agent.provider, JSON.stringify({
+              source: "support-case-workflow",
+              prompt,
+              task: { title: `Triage support case: ${title}`.slice(0, 200), priority },
+              memory,
+              workflow_context: workflowContext,
+              routing: { requested: agent.provider, manual: agent.provider },
+            })],
+          );
+          agentRunId = run.rows[0].id;
+        } else {
+          const runProvider = agent.provider === "agnostic" || !agent.provider ? "codex-cli" : agent.provider;
+          const run = await client.query<{ id: string }>(
+            `INSERT INTO agent_runs (agent_id,task_id,provider,status,summary,input)
+             VALUES ($1,$2,$3,'queued','Queued by Support case workflow.',$4::jsonb) RETURNING id`,
+            [agent.id, task.rows[0].id, runProvider, JSON.stringify({
+              source: "support-case-workflow",
+              workflow_context: workflowContext,
+            })],
+          );
+          agentRunId = run.rows[0].id;
+        }
       }
       await client.query(
         `INSERT INTO events (source,event_type,title,severity,project_id,payload)

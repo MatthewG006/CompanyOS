@@ -46,6 +46,9 @@ export function LiveOverview({ initial }: { initial: DashboardData }) {
         setData(next);
         setLastRefresh(next.generated_at);
       }
+    } catch {
+      // A dropped request (dev-server restart, sleep, navigation) must not surface as an unhandled rejection.
+      // Keep showing the last data; the next 30-second tick retries.
     } finally {
       setRefreshing(false);
     }

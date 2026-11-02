@@ -10,6 +10,41 @@ export async function GET() {
   return NextResponse.json({ tasks: data.tasks, source: data.source });
 }
 
+export async function PATCH(request: Request) {
+  if (!(await databaseAvailable())) {
+    return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  }
+
+  try {
+    const body = await request.json();
+    const taskId = typeof body?.id === "string" ? body.id.trim() : "";
+    const status = ["todo", "in_progress", "done", "completed", "blocked"].includes(body?.status) ? body.status : null;
+
+    if (!taskId || !status) {
+      return NextResponse.json({ error: "A valid id and status ('todo', 'in_progress', 'done', 'completed', 'blocked') are required." }, { status: 400 });
+    }
+
+    const updated = await query<{ id: string; title: string; status: string }>(
+      `UPDATE tasks SET status=$2, updated_at=NOW() WHERE id=$1 RETURNING id, title, status`,
+      [taskId, status],
+    );
+
+    if (!updated.rowCount) {
+      return NextResponse.json({ error: "Task not found." }, { status: 404 });
+    }
+
+    await query(
+      `INSERT INTO events (source, event_type, title, severity, payload)
+       VALUES ('command-center', 'task_updated', $1, 'info', $2::jsonb)`,
+      [`Task status updated to ${status}: ${updated.rows[0].title}`, JSON.stringify({ task_id: taskId, status })],
+    );
+
+    return NextResponse.json({ ok: true, task: updated.rows[0] });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid request." }, { status: 400 });
+  }
+}
+
 export async function POST(request: Request) {
   if (!(await databaseAvailable())) {
     return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
