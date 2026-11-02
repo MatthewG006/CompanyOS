@@ -39,20 +39,22 @@ async function runCodexPrompt(prompt) {
   const workspace = await mkdtemp(join(tmpdir(), "companyos-worker-"));
   try {
     return await new Promise((resolveRun, rejectRun) => {
+      // Pass clean environment inheriting essential system and Codex paths
+      const env = {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME || "/root",
+        USER: process.env.USER || "root",
+        CODEX_HOME: process.env.CODEX_HOME,
+        TERM: "dumb",
+      };
       const args = [
-        "exec", "--json", "--ephemeral", "--ignore-user-config",
-        "--cd", workspace, "--skip-git-repo-check",
-        "-c", 'approval_policy="never"',
-        "-c", 'default_permissions="companyos_isolated"',
-        "-c", 'permissions.companyos_isolated.filesystem.":root"="deny"',
-        "-c", 'permissions.companyos_isolated.filesystem.":minimal"="read"',
-        "-c", 'permissions.companyos_isolated.filesystem.":workspace_roots"."."="read"',
-        "-c", "permissions.companyos_isolated.network.enabled=false",
-        "-c", 'shell_environment_policy.inherit="none"',
+        "exec", "--json", "--ephemeral", "--skip-git-repo-check",
+        "--cd", workspace,
         "-",
       ];
-      const child = spawn("codex", args, { cwd: workspace, windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+      const child = spawn("codex", args, { cwd: workspace, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
       let stdout = "";
+      let stderr = "";
       let overflow = false;
       let timedOut = false;
       const timeout = setTimeout(() => {
@@ -68,6 +70,10 @@ async function runCodexPrompt(prompt) {
         }
         stdout += chunk;
       });
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk) => {
+        if (stderr.length < 5000) stderr += chunk;
+      });
       child.on("error", (err) => {
         clearTimeout(timeout);
         rejectRun(new Error(`Failed to start Codex CLI: ${err.message}`));
@@ -76,7 +82,10 @@ async function runCodexPrompt(prompt) {
         clearTimeout(timeout);
         if (timedOut) return rejectRun(new Error("Codex CLI timed out after 120s."));
         if (overflow) return rejectRun(new Error("Codex CLI output exceeded limit."));
-        if (code !== 0) return rejectRun(new Error(`Codex CLI exited with code ${code}.`));
+        if (code !== 0) {
+          const errDetail = stderr.trim() ? `: ${stderr.trim().slice(0, 300)}` : "";
+          return rejectRun(new Error(`Codex CLI exited with code ${code}${errDetail}`));
+        }
         const messages = [];
         for (const line of stdout.split(/\r?\n/)) {
           try {
