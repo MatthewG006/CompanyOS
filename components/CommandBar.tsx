@@ -2,7 +2,7 @@
 
 import { type FormEvent, useState } from "react";
 
-export function CommandBar() {
+export function CommandBar({ onCommandComplete }: { onCommandComplete?: () => void }) {
   const [command, setCommand] = useState("");
   const [response, setResponse] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -21,6 +21,7 @@ export function CommandBar() {
       const data = await result.json();
       setResponse(data.message ?? "Command accepted.");
       setCommand("");
+      if (onCommandComplete) onCommandComplete();
     } catch {
       setResponse("The command service is not available yet.");
     } finally {
@@ -36,7 +37,7 @@ export function CommandBar() {
           aria-label="Company Brain command"
           value={command}
           onChange={(e) => setCommand(e.target.value)}
-          placeholder="Ask the Company Brain… e.g. Show me everything that needs my attention"
+          placeholder="Ask the Company Brain… e.g. 'Create task for Engineer: Update landing page hero' or 'Show me everything that needs my attention'"
         />
         <button type="submit" disabled={busy}>{busy ? "Routing…" : "Run"}</button>
       </form>
