@@ -44,12 +44,39 @@ export async function POST(request: Request) {
       const dollars = (value: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value / 100);
       message = `Month-to-date: revenue ${dollars(data.finance.revenue_cents)}, expenses ${dollars(data.finance.expenses_cents)}, AI cost ${dollars(data.finance.ai_cost_cents)}, operating result ${dollars(data.finance.profit_cents)}.`;
       route = "finance";
-    } else if (lower.startsWith("create task") || lower.startsWith("add task")) {
+    } else if (
+      lower.startsWith("create task") ||
+      lower.startsWith("add task") ||
+      lower.startsWith("new task") ||
+      lower.startsWith("task:") ||
+      lower.startsWith("task ") ||
+      lower.startsWith("request") ||
+      lower.startsWith("please") ||
+      lower.includes("landing page") ||
+      lower.includes("wordpress") ||
+      lower.includes("website")
+    ) {
       if (data.source !== "database") {
         message = "Task creation requires the PostgreSQL Company Brain to be available.";
         route = "task-create-unavailable";
       } else {
-        let raw = command.replace(/^(create task|add task)\s*[:-]?\s*/i, "").trim();
+        let raw = command
+          .replace(/^(create task|add task|new task|task:|task|request|please)\s*[:-]?\s*/i, "")
+          .trim();
+
+        // Default or extract target project
+        let targetProject: { id: string; name: string } | null = null;
+        for (const proj of data.projects) {
+          if (raw.toLowerCase().includes(proj.name.toLowerCase()) || raw.toLowerCase().includes(proj.slug.toLowerCase())) {
+            targetProject = proj;
+            break;
+          }
+        }
+        if (!targetProject && (raw.toLowerCase().includes("wordpress") || raw.toLowerCase().includes("graphics") || raw.toLowerCase().includes("landing page"))) {
+          targetProject = data.projects.find((p) => p.name.toLowerCase().includes("graphics")) ?? null;
+        }
+
+        // Detect or match agent
         let targetAgent: { id: string; name: string } | null = null;
         const agentMatch = raw.match(/^(?:for|to)\s+([a-zA-Z0-9\s]+?)\s*[:-]\s*(.*)$/i);
         if (agentMatch) {
@@ -60,21 +87,26 @@ export async function POST(request: Request) {
             raw = agentMatch[2].trim();
           }
         }
+
+        if (!targetAgent) {
+          if (raw.toLowerCase().includes("design") || raw.toLowerCase().includes("page") || raw.toLowerCase().includes("website") || raw.toLowerCase().includes("wordpress")) {
+            targetAgent = data.agents.find((a) => a.name.toLowerCase() === "engineer" || a.name.toLowerCase() === "designer") ?? null;
+          }
+        }
+
         if (!raw) {
-          message = "Use: Create task: <task title> or Create task for <Agent>: <task title>";
+          message = "Please describe the task you want to create (e.g., 'Update Sky Mountain Graphics landing page with contact form').";
           route = "task-create-help";
         } else {
           const inserted = await query<{ id: string }>(
-            `INSERT INTO tasks (agent_id, title, priority, status) VALUES ($1,$2,'normal','todo') RETURNING id`,
-            [targetAgent?.id ?? null, raw]
+            `INSERT INTO tasks (project_id, agent_id, title, priority, status) VALUES ($1,$2,$3,'normal','todo') RETURNING id`,
+            [targetProject?.id ?? null, targetAgent?.id ?? null, raw]
           );
           await query(
             `INSERT INTO events (source,event_type,title,severity,payload) VALUES ('command-center','task_created',$1,'info',$2::jsonb)`,
-            [`Task created: ${raw}`, JSON.stringify({ task_id: inserted.rows[0].id, agent: targetAgent?.name })]
+            [`Task created: ${raw}`, JSON.stringify({ task_id: inserted.rows[0].id, agent: targetAgent?.name, project: targetProject?.name })]
           );
-          message = targetAgent
-            ? `Created task for ${targetAgent.name}: ${raw}.`
-            : `Created task: ${raw}.`;
+          message = `Created task: "${raw}"${targetAgent ? ` (Assigned to ${targetAgent.name})` : ""}${targetProject ? ` for ${targetProject.name}` : ""}. Open Agents or Tasks to run it.`;
           route = "task-create";
         }
       }

@@ -72,7 +72,7 @@ export function LiveOverview({ initial }: { initial: DashboardData }) {
       </div>
     </header>
 
-    <CommandBar />
+    <CommandBar onCommandComplete={refresh} />
 
     <div className="refresh-meta">Database source: <strong>{data.source}</strong> · Last refresh {formatTime(lastRefresh)} · Auto-refresh every 30 seconds</div>
 
