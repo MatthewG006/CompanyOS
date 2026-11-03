@@ -366,26 +366,28 @@ const publishWordPressPostTool: AgentTool = {
     const reason = boundedText(value.reason, 500);
     const title = boundedText(value.title, 200);
     const content = typeof value.content === "string" ? value.content.trim().slice(0, 50_000) : "";
-    return value.type === "publish_wordpress_post" && title && content && reason
-      ? { title, content, reason }
+    const pageId = typeof value.page_id === "number" ? value.page_id : undefined;
+    return (value.type === "publish_wordpress_post" || value.type === "update_wordpress_page") && title && content && reason
+      ? { title, content, reason, amountCents: pageId }
       : null;
   },
   approvalPayload(value) {
-    return { title: value.title, content: value.content };
+    return { title: value.title, content: value.content, page_id: value.amountCents };
   },
   approvalLabel(value) {
-    return `Publish WordPress draft: ${value.title}`;
+    return `Save WordPress page draft: ${value.title}`;
   },
   async execute(client, projectId, agentId, rawPayload, runId) {
     const payload = rawPayload && typeof rawPayload === "object" ? rawPayload as Record<string, unknown> : {};
     const title = boundedText(payload.title, 200);
     const content = typeof payload.content === "string" ? payload.content.trim() : "";
-    if (!title || !content || !projectId) throw new Error("The approved WordPress post payload is invalid.");
-    const result = await createWordPressPost({ title, content, status: "draft" });
+    const pageId = typeof payload.page_id === "number" ? payload.page_id : undefined;
+    if (!title || !content || !projectId) throw new Error("The approved WordPress payload is invalid.");
+    const result = await createWordPressPost({ page_id: pageId, title, content, status: "draft" });
     await client.query(
       `INSERT INTO events (source,event_type,title,severity,project_id,payload)
-       VALUES ('wordpress','wordpress_post_created','WordPress draft created from approved agent action','info',$1,$2::jsonb)`,
-      [projectId, JSON.stringify({ post_id: result.id, link: result.link, agent_run_id: runId, agent_id: agentId, title })],
+       VALUES ('wordpress','wordpress_page_updated','WordPress page saved from approved agent action','info',$1,$2::jsonb)`,
+      [projectId, JSON.stringify({ page_id: result.id, link: result.link, agent_run_id: runId, agent_id: agentId, title })],
     );
     return String(result.id);
   },
