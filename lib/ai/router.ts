@@ -178,10 +178,32 @@ export async function runWithProvider(provider: RoutedProvider, prompt: string):
     const key = process.env.ANTHROPIC_API_KEY;
     const model = process.env.AI_ANTHROPIC_MODEL;
     if (!key || !model) throw new Error("Anthropic requires ANTHROPIC_API_KEY and AI_ANTHROPIC_MODEL.");
+    // Support Anthropic Prompt Caching for 90% discount on long system/task prompts
     const body = await requestJson("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "Content-Type": "application/json" },
-      body: JSON.stringify({ model, max_tokens: 1800, temperature: 0.2, messages: [{ role: "user", content: prompt }] }),
+      headers: {
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "prompt-caching-2024-07-31",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 1800,
+        temperature: 0.2,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: prompt,
+                cache_control: { type: "ephemeral" },
+              },
+            ],
+          },
+        ],
+      }),
     });
     const text = body.content?.filter((part: { type?: string }) => part.type === "text").map((part: { text?: string }) => part.text ?? "").join("\n");
     if (typeof text !== "string" || !text) throw new Error("Anthropic returned no text response.");
