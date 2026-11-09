@@ -168,3 +168,5 @@ CompanyOS now has a provider-independent AI task contract and provider registry.
 
 The database scripts load the same Next.js environment as the application. Run `npm run db:doctor` to verify that the active `DATABASE_URL` contains the required CompanyOS tables. If `financial_transactions` (or another required table) is missing, run `npm run db:migrate` against that same environment.
 
+SSL certificates are verified by default; use `sslmode=no-verify` in `DATABASE_URL` only for endpoints with self-signed certificates.
+

@@ -159,10 +159,17 @@ async function runCodexPrompt(prompt) {
 
 // Database direct mode (opt-in via COMPANYOS_WORKER_MODE=db; see above)
 if (useDatabaseMode) {
+  // SSL rule mirrors resolveDatabaseSsl in lib/db-ssl.ts (this standalone
+  // script cannot import it; tests/worker-ssl-parity.test.ts pins parity):
+  // SSL on per the host/sslmode decision below, certificates verified by
+  // default, and only an explicit sslmode=no-verify — captured here, before
+  // sslmode is stripped from the URL — opts out of verification.
   let dbUrl = process.env.DATABASE_URL;
   const isLocal = dbUrl.includes("localhost") || dbUrl.includes("127.0.0.1");
   const isSslDisabled = dbUrl.includes("sslmode=disable");
-  const useSsl = (!isLocal && !isSslDisabled) || dbUrl.includes("supabase") || dbUrl.includes("sslmode=") || dbUrl.includes("render.com") || dbUrl.includes("neon.tech");
+  const sslNoVerify = dbUrl.includes("sslmode=no-verify");
+  const useSsl = (!isLocal && !isSslDisabled) || dbUrl.includes("supabase") || (dbUrl.includes("sslmode=") && !isSslDisabled) || dbUrl.includes("render.com") || dbUrl.includes("neon.tech");
+  const rejectUnauthorized = !sslNoVerify;
   dbUrl = dbUrl.replace(/([?&])sslmode=[^&]*(&|$)/, "$1").replace(/[?&]$/, "");
 
   const pool = new Pool({
@@ -170,39 +177,50 @@ if (useDatabaseMode) {
     max: 5,
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 5_000,
-    ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+    ...(useSsl ? { ssl: { rejectUnauthorized } } : {}),
   });
 
   const workerId = randomUUID();
   console.log(`CompanyOS autonomous database worker started (Worker ID: ${workerId}).`);
   console.log(`Polling Supabase / PostgreSQL every ${interval}ms for queued agent runs...`);
 
+  // Maintenance (the heartbeat write + Codex status check, and the lease
+  // expiry sweep) runs at most once per maintenance window instead of on
+  // every poll, so idle polls between windows are read-only run claims
+  // with no write churn. Claiming itself stays on the poll interval.
+  const MAINTENANCE_INTERVAL_MS = 30_000;
+  let lastMaintenanceAt = 0;
+
   while (!stopping) {
     let client = null;
     try {
       client = await pool.connect();
 
-      // Update heartbeat. Agent permissions are owner-managed (seed/schema
-      // grants only); this worker must never re-grant them at runtime.
-      const codexStatus = await checkCodexStatus();
-      await client.query(
-        `INSERT INTO runtime_heartbeats (service_name,instance_id,status,details,last_seen_at)
-         VALUES ('agent-worker',$1,$2,$3::jsonb,NOW())
-         ON CONFLICT (service_name) DO UPDATE SET instance_id=EXCLUDED.instance_id,status=EXCLUDED.status,details=EXCLUDED.details,last_seen_at=NOW()`,
-        [workerId, codexStatus.authenticated ? "online" : "degraded", JSON.stringify({ codex_cli_authenticated: codexStatus.authenticated })],
-      );
+      if (Date.now() - lastMaintenanceAt >= MAINTENANCE_INTERVAL_MS) {
+        lastMaintenanceAt = Date.now();
 
-      // Expire runs whose worker lease has lapsed (mirrors the HTTP worker
-      // route, scoped to this mode's running summary), so a worker killed
-      // mid-run does not leave the run 'running' forever.
-      await client.query(
-        `WITH expired AS (
-           UPDATE agent_runs SET status='failed',error='Worker lease expired.',summary='Worker lease expired.',completed_at=NOW()
-           WHERE status='running' AND summary='Worker running on VM.' AND started_at < NOW()-INTERVAL '5 minutes'
-           RETURNING id
-         )
-         UPDATE workflow_dispatches SET status='failed' WHERE agent_run_id IN (SELECT id FROM expired)`,
-      );
+        // Update heartbeat. Agent permissions are owner-managed (seed/schema
+        // grants only); this worker must never re-grant them at runtime.
+        const codexStatus = await checkCodexStatus();
+        await client.query(
+          `INSERT INTO runtime_heartbeats (service_name,instance_id,status,details,last_seen_at)
+           VALUES ('agent-worker',$1,$2,$3::jsonb,NOW())
+           ON CONFLICT (service_name) DO UPDATE SET instance_id=EXCLUDED.instance_id,status=EXCLUDED.status,details=EXCLUDED.details,last_seen_at=NOW()`,
+          [workerId, codexStatus.authenticated ? "online" : "degraded", JSON.stringify({ codex_cli_authenticated: codexStatus.authenticated })],
+        );
+
+        // Expire runs whose worker lease has lapsed (mirrors the HTTP worker
+        // route, scoped to this mode's running summary), so a worker killed
+        // mid-run does not leave the run 'running' forever.
+        await client.query(
+          `WITH expired AS (
+             UPDATE agent_runs SET status='failed',error='Worker lease expired.',summary='Worker lease expired.',completed_at=NOW()
+             WHERE status='running' AND summary='Worker running on VM.' AND started_at < NOW()-INTERVAL '5 minutes'
+             RETURNING id
+           )
+           UPDATE workflow_dispatches SET status='failed' WHERE agent_run_id IN (SELECT id FROM expired)`,
+        );
+      }
 
       // Claim next queued run
       await client.query("BEGIN");
