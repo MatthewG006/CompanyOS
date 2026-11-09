@@ -87,6 +87,8 @@ npm run agents:worker
 
 The worker claims queued `codex-cli` runs, including approved delegations and new Gmail follow-ups. The AI Workforce page also lets you run one queued task on demand. Neither path falls back to paid API providers. Install and sign in to Codex CLI on the CompanyOS host first; see `docs/ai-router.md` for the flow and security boundary.
 
+By default the worker polls the app over HTTP. A direct-database mode exists for hosts that cannot reach the app, but it is opt-in only: set `COMPANYOS_WORKER_MODE=db` (with `DATABASE_URL` present) — `DATABASE_URL` alone never selects it. DB mode bypasses the HTTP worker route's ancillary jobs (outbound email, sales follow-up dispatch, handoff expiry), so prefer HTTP mode unless the deployment specifically needs DB mode.
+
 ## Local environment setup
 
 Generate a 32-byte encryption key:
