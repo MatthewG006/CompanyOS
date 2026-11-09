@@ -17,6 +17,28 @@ for (const line of envFile.split(/\r?\n/)) {
 }
 
 const interval = Math.min(60_000, Math.max(1_000, Number(process.env.COMPANYOS_AGENT_WORKER_INTERVAL_MS) || 3_000));
+
+// Worker mode is explicit opt-in. Direct database mode runs only when
+// COMPANYOS_WORKER_MODE=db AND DATABASE_URL is present; DATABASE_URL alone
+// must never select it, because DB mode bypasses the HTTP worker route and
+// its ancillary jobs (outbound email, sales follow-ups, handoff expiry).
+// Anything else — including "db" without DATABASE_URL — uses HTTP polling.
+const requestedWorkerMode = (process.env.COMPANYOS_WORKER_MODE || "").trim().toLowerCase();
+if (requestedWorkerMode === "db" && !process.env.DATABASE_URL) {
+  console.error("COMPANYOS_WORKER_MODE=db requires DATABASE_URL; falling back to HTTP polling mode.");
+}
+const useDatabaseMode = requestedWorkerMode === "db" && Boolean(process.env.DATABASE_URL);
+
+// Mirror of boundedText in lib/ai/tool-registry.ts: strips control
+// characters, trims, and slices to the limit.
+function boundedText(value, limit) {
+  if (typeof value !== "string") return "";
+  return Array.from(value, (character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127 ? " " : character;
+  }).join("").trim().slice(0, limit);
+}
+
 let stopping = false;
 process.on("SIGINT", () => { stopping = true; });
 process.on("SIGTERM", () => { stopping = true; });
@@ -135,8 +157,8 @@ async function runCodexPrompt(prompt) {
   }
 }
 
-// Database direct mode
-if (process.env.DATABASE_URL) {
+// Database direct mode (opt-in via COMPANYOS_WORKER_MODE=db; see above)
+if (useDatabaseMode) {
   let dbUrl = process.env.DATABASE_URL;
   const isLocal = dbUrl.includes("localhost") || dbUrl.includes("127.0.0.1");
   const isSslDisabled = dbUrl.includes("sslmode=disable");
@@ -160,7 +182,8 @@ if (process.env.DATABASE_URL) {
     try {
       client = await pool.connect();
 
-      // Update heartbeat and ensure agents have publish permission
+      // Update heartbeat. Agent permissions are owner-managed (seed/schema
+      // grants only); this worker must never re-grant them at runtime.
       const codexStatus = await checkCodexStatus();
       await client.query(
         `INSERT INTO runtime_heartbeats (service_name,instance_id,status,details,last_seen_at)
@@ -169,11 +192,16 @@ if (process.env.DATABASE_URL) {
         [workerId, codexStatus.authenticated ? "online" : "degraded", JSON.stringify({ codex_cli_authenticated: codexStatus.authenticated })],
       );
 
-      // Ensure engineer, designer, and graphics agents have request_wordpress_publish in allowed_actions
+      // Expire runs whose worker lease has lapsed (mirrors the HTTP worker
+      // route, scoped to this mode's running summary), so a worker killed
+      // mid-run does not leave the run 'running' forever.
       await client.query(
-        `UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_wordpress_publish"]'::jsonb
-         WHERE LOWER(name) IN ('engineer', 'designer', 'graphics', 'marketing')
-           AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_wordpress_publish')`,
+        `WITH expired AS (
+           UPDATE agent_runs SET status='failed',error='Worker lease expired.',summary='Worker lease expired.',completed_at=NOW()
+           WHERE status='running' AND summary='Worker running on VM.' AND started_at < NOW()-INTERVAL '5 minutes'
+           RETURNING id
+         )
+         UPDATE workflow_dispatches SET status='failed' WHERE agent_run_id IN (SELECT id FROM expired)`,
       );
 
       // Claim next queued run
@@ -238,16 +266,24 @@ if (process.env.DATABASE_URL) {
               if (start >= 0 && end > start) {
                 const parsed = JSON.parse(execResult.text.slice(start, end + 1));
                 if (Array.isArray(parsed.proposed_actions)) {
+                  // Mirror publishWordPressPostTool in lib/ai/tool-registry.ts:
+                  // only agents that hold request_wordpress_publish may propose
+                  // a publish, the run must be project-scoped, and fields are
+                  // bounded the same way before anything reaches approvals.
+                  const canPublishWordPress = Array.isArray(task.agent_allowed_actions) && task.agent_allowed_actions.includes("request_wordpress_publish");
                   for (const [idx, prop] of parsed.proposed_actions.slice(0, 5).entries()) {
-                    if (prop?.type === "publish_wordpress_post" && prop.title && prop.content) {
-                      await pool.query(
-                        `INSERT INTO approvals (project_id,requested_by,action,risk_level,reason,agent_run_id,agent_id,action_type,proposal_index,payload)
-                         VALUES ($1,$2,$3,'high',$4,$5,$6,'publish_wordpress_post',$7,$8::jsonb)
-                         ON CONFLICT (agent_run_id,proposal_index) WHERE agent_run_id IS NOT NULL AND proposal_index IS NOT NULL DO NOTHING`,
-                        [task.project_id, task.agent_name ?? "Agent", `Publish WordPress draft: ${prop.title}`, prop.reason ?? "Website publication", claimed.id, task.agent_id, idx, JSON.stringify({ title: prop.title, content: prop.content })],
-                      );
-                      proposalCount += 1;
-                    }
+                    if (prop?.type !== "publish_wordpress_post" || !canPublishWordPress || !task.project_id) continue;
+                    const title = boundedText(prop.title, 200);
+                    const content = typeof prop.content === "string" ? prop.content.trim().slice(0, 50_000) : "";
+                    const reason = boundedText(prop.reason, 500);
+                    if (!title || !content || !reason) continue;
+                    await pool.query(
+                      `INSERT INTO approvals (project_id,requested_by,action,risk_level,reason,agent_run_id,agent_id,action_type,proposal_index,payload)
+                       VALUES ($1,$2,$3,'high',$4,$5,$6,'publish_wordpress_post',$7,$8::jsonb)
+                       ON CONFLICT (agent_run_id,proposal_index) WHERE agent_run_id IS NOT NULL AND proposal_index IS NOT NULL DO NOTHING`,
+                      [task.project_id, task.agent_name ?? "Agent", `Publish WordPress draft: ${title}`, reason, claimed.id, task.agent_id, idx, JSON.stringify({ title, content })],
+                    );
+                    proposalCount += 1;
                   }
                 }
               }
