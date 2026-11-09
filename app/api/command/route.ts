@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 import { databaseAvailable, query } from "@/lib/db";
 import { getDashboardData } from "@/lib/data";
+import {
+  buildExplicitTaskDraft,
+  buildInferredTaskDraft,
+  isExplicitTaskCommand,
+  isInferredWebsiteTaskCommand,
+  type TaskDraft,
+} from "@/lib/command-bar";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +31,41 @@ export async function POST(request: Request) {
     let message = "";
     let route = "help";
 
-    if (lower.includes("attention") || lower.includes("needs my attention")) {
+    // Shared task-creation flow for both the explicit and inferred task
+    // paths, including the database guard and the empty-title help response.
+    const createTask = async (draft: TaskDraft | null) => {
+      if (data.source !== "database") {
+        message = "Task creation requires the PostgreSQL Company Brain to be available.";
+        route = "task-create-unavailable";
+        return;
+      }
+      if (!draft?.title) {
+        message = "Please describe the task you want to create (e.g., 'Update Sky Mountain Graphics landing page with contact form').";
+        route = "task-create-help";
+        return;
+      }
+      const inserted = await query<{ id: string }>(
+        `INSERT INTO tasks (project_id, agent_id, title, priority, status) VALUES ($1,$2,$3,'normal','todo') RETURNING id`,
+        [draft.project?.id ?? null, draft.agent?.id ?? null, draft.title]
+      );
+      await query(
+        `INSERT INTO events (source,event_type,title,severity,payload) VALUES ('command-center','task_created',$1,'info',$2::jsonb)`,
+        [`Task created: ${draft.title}`, JSON.stringify({ task_id: inserted.rows[0].id, agent: draft.agent?.name, project: draft.project?.name })]
+      );
+      message = `Created task: "${draft.title}"${draft.agent ? ` (Assigned to ${draft.agent.name})` : ""}${draft.project ? ` for ${draft.project.name}` : ""}. Open Agents or Tasks to run it.`;
+      route = "task-create";
+    };
+
+    // Decision order matters (see lib/command-bar.ts):
+    // 1. Explicit task commands first, so a "create task" command that merely
+    //    mentions a project, agent, or finance topic still creates the task.
+    // 2. The info branches below, unchanged.
+    // 3. Inferred website tasks: imperative commands about the website that
+    //    are not questions or info requests.
+    // 4. The help fallback.
+    if (isExplicitTaskCommand(command)) {
+      await createTask(buildExplicitTaskDraft(command, data.projects, data.agents));
+    } else if (lower.includes("attention") || lower.includes("needs my attention")) {
       const warnings = data.events.filter((e) => e.severity !== "info").length;
       const unhealthy = data.system_checks.filter((check) => !["healthy", "active"].includes(check.status)).length;
       message = `Attention queue: ${data.approvals.length} owner approval(s), ${warnings} warning event(s), ${unhealthy} non-healthy system check(s), and ${data.tasks.length} open task(s).`;
@@ -44,72 +85,6 @@ export async function POST(request: Request) {
       const dollars = (value: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value / 100);
       message = `Month-to-date: revenue ${dollars(data.finance.revenue_cents)}, expenses ${dollars(data.finance.expenses_cents)}, AI cost ${dollars(data.finance.ai_cost_cents)}, operating result ${dollars(data.finance.profit_cents)}.`;
       route = "finance";
-    } else if (
-      lower.startsWith("create task") ||
-      lower.startsWith("add task") ||
-      lower.startsWith("new task") ||
-      lower.startsWith("task:") ||
-      lower.startsWith("task ") ||
-      lower.startsWith("request") ||
-      lower.startsWith("please") ||
-      lower.includes("landing page") ||
-      lower.includes("wordpress") ||
-      lower.includes("website")
-    ) {
-      if (data.source !== "database") {
-        message = "Task creation requires the PostgreSQL Company Brain to be available.";
-        route = "task-create-unavailable";
-      } else {
-        let raw = command
-          .replace(/^(create task|add task|new task|task:|task|request|please)\s*[:-]?\s*/i, "")
-          .trim();
-
-        // Default or extract target project
-        let targetProject: { id: string; name: string } | null = null;
-        for (const proj of data.projects) {
-          if (raw.toLowerCase().includes(proj.name.toLowerCase()) || raw.toLowerCase().includes(proj.slug.toLowerCase())) {
-            targetProject = proj;
-            break;
-          }
-        }
-        if (!targetProject && (raw.toLowerCase().includes("wordpress") || raw.toLowerCase().includes("graphics") || raw.toLowerCase().includes("landing page"))) {
-          targetProject = data.projects.find((p) => p.name.toLowerCase().includes("graphics")) ?? null;
-        }
-
-        // Detect or match agent
-        let targetAgent: { id: string; name: string } | null = null;
-        const agentMatch = raw.match(/^(?:for|to)\s+([a-zA-Z0-9\s]+?)\s*[:-]\s*(.*)$/i);
-        if (agentMatch) {
-          const candidateName = agentMatch[1].trim();
-          const found = data.agents.find((a) => a.name.toLowerCase() === candidateName.toLowerCase());
-          if (found) {
-            targetAgent = found;
-            raw = agentMatch[2].trim();
-          }
-        }
-
-        if (!targetAgent) {
-          if (raw.toLowerCase().includes("design") || raw.toLowerCase().includes("page") || raw.toLowerCase().includes("website") || raw.toLowerCase().includes("wordpress")) {
-            targetAgent = data.agents.find((a) => a.name.toLowerCase() === "engineer" || a.name.toLowerCase() === "designer") ?? null;
-          }
-        }
-
-        if (!raw) {
-          message = "Please describe the task you want to create (e.g., 'Update Sky Mountain Graphics landing page with contact form').";
-          route = "task-create-help";
-        } else {
-          const inserted = await query<{ id: string }>(
-            `INSERT INTO tasks (project_id, agent_id, title, priority, status) VALUES ($1,$2,$3,'normal','todo') RETURNING id`,
-            [targetProject?.id ?? null, targetAgent?.id ?? null, raw]
-          );
-          await query(
-            `INSERT INTO events (source,event_type,title,severity,payload) VALUES ('command-center','task_created',$1,'info',$2::jsonb)`,
-            [`Task created: ${raw}`, JSON.stringify({ task_id: inserted.rows[0].id, agent: targetAgent?.name, project: targetProject?.name })]
-          );
-          message = `Created task: "${raw}"${targetAgent ? ` (Assigned to ${targetAgent.name})` : ""}${targetProject ? ` for ${targetProject.name}` : ""}. Open Agents or Tasks to run it.`;
-          route = "task-create";
-        }
-      }
     } else if (lower.includes("email") || lower.includes("mail")) {
       const records = data.external_records.filter((item) => item.record_type === "email");
       message = records.length ? `CompanyOS has ${records.length} synchronized email record(s) in the dashboard cache. The most recent is: ${records[0].title}.` : "No synchronized Gmail records are stored yet. Connect Google locally, then run Gmail sync.";
@@ -128,6 +103,8 @@ export async function POST(request: Request) {
     } else if (lower.includes("integration")) {
       message = `Integration registry: ${data.integrations.map((item) => `${item.name}=${item.status}`).join(" · ")}.`;
       route = "integrations";
+    } else if (isInferredWebsiteTaskCommand(command)) {
+      await createTask(buildInferredTaskDraft(command, data.projects, data.agents));
     } else {
       message = "Try: Show me everything that needs my attention · List projects · Show AI workforce · Check system health · Show finance · Create task: <title> · Create task for Engineer: <title> · Show integrations.";
     }
