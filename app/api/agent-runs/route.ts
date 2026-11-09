@@ -8,6 +8,7 @@ import { providerRegistry } from "@/lib/ai/provider-registry";
 import { DispatchError, executeWithFallback, planDispatch } from "@/lib/ai/dispatch-plan";
 import { capNotice, localCapStatus, localRunsPerHour } from "@/lib/ai/local-cap";
 import { normalizeProviderList, normalizeTaskCapabilities, normalizeTaskConstraints, type TaskSpec } from "@/lib/ai/task-spec";
+import { workerReportsCodexAvailable } from "@/lib/ai/worker-status";
 
 export const dynamic = "force-dynamic";
 
@@ -34,12 +35,12 @@ export async function GET(request: Request) {
   const run_counts = Object.fromEntries(countResult.rows.map((row) => [row.status, Number(row.count)]));
   const codex_cli = await getCodexCliStatus();
   const local_cap = await localCapStatus(query, localRunsPerHour(process.env.AGENT_LOCAL_MAX_RUNS_PER_HOUR));
-  const workerResult = await query<{ status: string; details: { codex_cli_authenticated?: boolean }; last_seen_at: string; online: boolean }>(
-    `SELECT status,details,last_seen_at::text,(last_seen_at > NOW()-INTERVAL '3 minutes') AS online
+  const workerResult = await query<{ status: string; details: { codex_cli_authenticated?: boolean }; last_seen_at: string; online: boolean; age_seconds: number }>(
+    `SELECT status,details,last_seen_at::text,(last_seen_at > NOW()-INTERVAL '3 minutes') AS online,EXTRACT(EPOCH FROM (NOW() - last_seen_at))::float AS age_seconds
      FROM runtime_heartbeats WHERE service_name='agent-worker'`,
   );
   const worker = workerResult.rows[0] ?? null;
-  const isCodexAvailable = codex_cli.authenticated || (Boolean(worker?.online) && Boolean(worker?.details?.codex_cli_authenticated));
+  const isCodexAvailable = codex_cli.authenticated || workerReportsCodexAvailable(worker);
   return NextResponse.json({ runs: runs.rows, run_counts, local_cap, providers: { ...configuredProviders(), "codex-cli": isCodexAvailable }, provider_status: { "codex-cli": { ...codex_cli, authenticated: isCodexAvailable } }, agent_worker: worker, auth_required: process.env.NODE_ENV !== "production" && Boolean(process.env.COMPANYOS_ADMIN_TOKEN) });
 }
 
@@ -169,12 +170,12 @@ export async function POST(request: Request) {
     };
     const manualChoice = typeof body?.manual_provider === "string" && (handoffProviders as readonly string[]).includes(body.manual_provider) ? body.manual_provider : undefined;
     const codex = await getCodexCliStatus();
-    const workerCheck = await query<{ details: { codex_cli_authenticated?: boolean }; online: boolean }>(
-      `SELECT details,(last_seen_at > NOW()-INTERVAL '3 minutes') AS online
+    const workerCheck = await query<{ status: string; details: { codex_cli_authenticated?: boolean }; online: boolean; age_seconds: number }>(
+      `SELECT status,details,(last_seen_at > NOW()-INTERVAL '3 minutes') AS online,EXTRACT(EPOCH FROM (NOW() - last_seen_at))::float AS age_seconds
        FROM runtime_heartbeats WHERE service_name='agent-worker'`,
     );
     const workerRow = workerCheck.rows[0];
-    const codexCliUsable = codex.authenticated || (Boolean(workerRow?.online) && Boolean(workerRow?.details?.codex_cli_authenticated));
+    const codexCliUsable = codex.authenticated || workerReportsCodexAvailable(workerRow);
 
     const localCap = await localCapStatus(query, localRunsPerHour(process.env.AGENT_LOCAL_MAX_RUNS_PER_HOUR));
     const plan = planDispatch({

@@ -1,24 +1,19 @@
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
+import { resolveDatabaseSsl } from "@/lib/db-ssl";
 
 let pool: Pool | null = null;
 
 function getPool() {
   if (!process.env.DATABASE_URL) return null;
   if (!pool) {
-    const rawUrl = process.env.DATABASE_URL;
-    const isLocalhost = rawUrl.includes("localhost") || rawUrl.includes("127.0.0.1");
-    const sslDisabled = rawUrl.includes("sslmode=disable");
-    const useSsl = (!isLocalhost && !sslDisabled) || rawUrl.includes("supabase") || rawUrl.includes("sslmode=") || rawUrl.includes("render.com") || rawUrl.includes("neon.tech");
-
-    // Strip sslmode parameters to prevent pg-connection-string from overriding explicit SSL options or raising warnings
-    const cleanedUrl = rawUrl.replace(/([?&])sslmode=[^&]*(&|$)/, "$1").replace(/[?&]$/, "");
+    const { useSsl, rejectUnauthorized, cleanedUrl } = resolveDatabaseSsl(process.env.DATABASE_URL);
 
     pool = new Pool({
       connectionString: cleanedUrl,
       max: 5,
       idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 5_000,
-      ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+      ...(useSsl ? { ssl: { rejectUnauthorized } } : {}),
     });
   }
   return pool;
