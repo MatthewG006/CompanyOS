@@ -34,22 +34,51 @@ async function checkCodexStatus() {
   });
 }
 
+// Codex isolation arguments. These MUST stay in parity with the server-side
+// runner in lib/ai/router.ts (runWithCodexCli): the worker executes the same
+// untrusted task prompts, so it gets the same boundary — no user config, no
+// approvals, an isolated permission profile with the filesystem denied by
+// default, no network, and no inherited shell environment for model tools.
+// tests/worker-codex-isolation.test.ts asserts this parity; update both
+// places together.
+const CODEX_ISOLATION_CONFIG_ARGS = [
+  "-c", 'approval_policy="never"',
+  "-c", 'default_permissions="companyos_isolated"',
+  "-c", 'permissions.companyos_isolated.filesystem.":root"="deny"',
+  "-c", 'permissions.companyos_isolated.filesystem.":minimal"="read"',
+  "-c", 'permissions.companyos_isolated.filesystem.":workspace_roots"."."="read"',
+  "-c", "permissions.companyos_isolated.network.enabled=false",
+  "-c", 'shell_environment_policy.inherit="none"',
+];
+
 // Execute prompt via local Codex CLI
 async function runCodexPrompt(prompt) {
   const workspace = await mkdtemp(join(tmpdir(), "companyos-worker-"));
   try {
     return await new Promise((resolveRun, rejectRun) => {
-      // Pass clean environment inheriting essential system and Codex paths
-      const env = {
-        PATH: process.env.PATH,
-        HOME: process.env.HOME || "/root",
-        USER: process.env.USER || "root",
-        CODEX_HOME: process.env.CODEX_HOME,
-        TERM: "dumb",
-      };
+      // Pass only the environment the Codex CLI process itself needs (PATH and
+      // its credential home). Model tool calls do not inherit it: see
+      // shell_environment_policy above. Undefined entries are dropped so no
+      // literal "undefined" values reach the child process.
+      const env = Object.fromEntries(
+        Object.entries({
+          NODE_ENV: "production",
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          USER: process.env.USER,
+          CODEX_HOME: process.env.CODEX_HOME,
+          USERPROFILE: process.env.USERPROFILE,
+          SystemRoot: process.env.SystemRoot,
+          WINDIR: process.env.WINDIR,
+          TEMP: process.env.TEMP,
+          TMP: process.env.TMP,
+          TERM: "dumb",
+        }).filter(([, value]) => value !== undefined),
+      );
       const args = [
-        "exec", "--json", "--ephemeral", "--skip-git-repo-check",
-        "--cd", workspace,
+        "exec", "--json", "--ephemeral", "--ignore-user-config",
+        "--cd", workspace, "--skip-git-repo-check",
+        ...CODEX_ISOLATION_CONFIG_ARGS,
         "-",
       ];
       const child = spawn("codex", args, { cwd: workspace, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
