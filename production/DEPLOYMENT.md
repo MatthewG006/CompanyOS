@@ -1,5 +1,7 @@
 # CompanyOS production deployment (Proxmox)
 
+> This is the self-hosted baseline. For the current live deployment (Vercel + Supabase), see the README's "Production deployment" section.
+
 This setup runs the Next.js app, PostgreSQL, and Codex execution runtime in
 Docker Compose on Proxmox. PostgreSQL has no published host port. The app binds
 to `127.0.0.1` on the Proxmox host. Cloudflare Tunnel connects outbound from
