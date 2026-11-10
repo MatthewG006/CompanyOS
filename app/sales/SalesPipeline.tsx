@@ -25,7 +25,25 @@ type Lead = {
   reminder_id: string | null;
   reminder_status: "open" | "completed" | "superseded" | "cancelled" | null;
   source_attention_item_id: string | null;
+  first_contacted_at: string | null;
+  created_at: string;
 };
+
+const outcomeButtons: Array<{ value: string; label: string }> = [
+  { value: "contacted", label: "Contacted" },
+  { value: "visit", label: "Visit" },
+  { value: "quote", label: "Quote" },
+  { value: "won", label: "Won" },
+  { value: "lost", label: "Lost" },
+];
+
+function firstResponseLabel(lead: Lead): string | null {
+  if (!lead.first_contacted_at || !lead.created_at) return null;
+  const minutes = Math.max(0, Math.round((new Date(lead.first_contacted_at).getTime() - new Date(lead.created_at).getTime()) / 60_000));
+  if (minutes < 60) return `first response in ${minutes} min`;
+  if (minutes < 60 * 48) return `first response in ${Math.round(minutes / 60)}h`;
+  return `first response in ${Math.round(minutes / (60 * 24))}d`;
+}
 type LeadDraft = { stage: Stage; estimated_value: string; follow_up_at: string; notes: string };
 
 const stageLabels: Array<{ value: Stage; label: string }> = [
@@ -142,6 +160,22 @@ export function SalesPipeline({ projects, authRequired }: { projects: Project[];
     }
   }
 
+  async function recordOutcome(lead: Lead, outcome: string) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/sales/outcomes", { method: "POST", headers: headers(), body: JSON.stringify({ lead_id: lead.id, outcome }) });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Could not record the outcome.");
+      setMessage(`Outcome recorded: ${outcome} — ${lead.opportunity_title}.`);
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not record the outcome.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function savePreference(lead: Lead, channel: "email" | "whatsapp", status: "opted_in" | "opted_out") {
     setBusy(true);
     setMessage("");
@@ -194,6 +228,7 @@ export function SalesPipeline({ projects, authRequired }: { projects: Project[];
           <div className="sales-lead-heading"><div><span className="sales-project-label">{lead.project_name} · {lead.source_attention_item_id ? "GMAIL · OWNER APPROVED" : "OWNER ENTERED"}</span><h3>{lead.opportunity_title}</h3><p>{lead.contact_name ?? "Unknown contact"}{lead.organization ? ` · ${lead.organization}` : ""}{lead.email ? ` · ${lead.email}` : ""}</p></div><strong className="sales-value">{money(lead.estimated_value_cents)}</strong></div>
           <div className="sales-consent-row"><div><strong>Email:</strong> {lead.email_preference ?? "preference not recorded"}{lead.email ? <>{lead.email_preference === "opted_out" ? <input aria-label={`Email opt-in evidence for ${lead.contact_name ?? "contact"}`} maxLength={500} placeholder="Re-consent source and date" value={consentEvidence[lead.id] ?? ""} onChange={(event) => setConsentEvidence((current) => ({ ...current, [lead.id]: event.target.value }))} /> : null}<button type="button" className="refresh-button" disabled={busy || (lead.email_preference === "opted_out" && !consentEvidence[lead.id]?.trim())} onClick={() => void savePreference(lead, "email", lead.email_preference === "opted_out" ? "opted_in" : "opted_out")}>{lead.email_preference === "opted_out" ? "Record email opt-in" : "Record email opt-out"}</button></> : null}</div><div><strong>WhatsApp:</strong> {lead.whatsapp_preference ?? "no documented opt-in"}{lead.phone ? <><input aria-label={`WhatsApp opt-in evidence for ${lead.contact_name ?? "contact"}`} maxLength={500} placeholder="Consent source and date" value={consentEvidence[lead.id] ?? ""} onChange={(event) => setConsentEvidence((current) => ({ ...current, [lead.id]: event.target.value }))} /><button type="button" className="refresh-button" disabled={busy || !consentEvidence[lead.id]?.trim()} onClick={() => void savePreference(lead, "whatsapp", "opted_in")}>Record WhatsApp opt-in</button><button type="button" className="refresh-button" disabled={busy} onClick={() => void savePreference(lead, "whatsapp", "opted_out")}>Opt out</button></> : <span className="muted"> Add a phone number to track consent.</span>}</div></div>
           {lead.reminder_status ? <div className="sales-reminder-status"><span>Follow-up reminder · {lead.reminder_status === "open" ? "task queued" : lead.reminder_status}</span>{lead.reminder_status === "open" ? <button type="button" className="refresh-button" disabled={busy} onClick={() => void completeReminder(lead)}>Mark completed</button> : null}</div> : null}
+          <div className="sales-outcome-row"><span className="sales-outcome-label">Outcome{firstResponseLabel(lead) ? ` · ${firstResponseLabel(lead)}` : ""}</span>{outcomeButtons.map((button) => <button key={button.value} type="button" className="refresh-button" disabled={busy} onClick={() => void recordOutcome(lead, button.value)}>{button.label}</button>)}</div>
           <div className="sales-edit-grid">
             <label className="router-field">Stage<select value={draft.stage} onChange={(event) => updateLeadDraft(lead.id, "stage", event.target.value)}>{stageLabels.map((stage) => <option key={stage.value} value={stage.value}>{stage.label}</option>)}</select></label>
             <label className="router-field">Estimated value (USD)<input type="number" min="0" max="1000000000" step="0.01" value={draft.estimated_value} onChange={(event) => updateLeadDraft(lead.id, "estimated_value", event.target.value)} /></label>

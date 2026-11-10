@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { sendGoogleEmail } from "@/lib/integrations/google";
+import { queueFirstResponse } from "@/lib/ai/first-response";
 import { queueTaskExecution } from "@/lib/ai/queue-task-run";
 import { createWordPressPost } from "@/lib/integrations/wordpress";
 
@@ -315,6 +316,8 @@ const createSalesLeadTool: AgentTool = {
        VALUES ('sales-pipeline','sales_lead_created','Owner-approved sales lead created','info',$1,$2::jsonb)`,
       [projectId, JSON.stringify({ lead_id: result.rows[0].id, attention_item_id: sourceItem.attention_item_id, agent_run_id: runId, agent_id: agentId, stage: "new" })],
     );
+    // Lead Desk speed rule: the new lead gets a first-response task at once.
+    await queueFirstResponse(client, { projectId, leadId: result.rows[0].id, leadTitle: opportunityTitle });
     return result.rows[0].id;
   },
 };
