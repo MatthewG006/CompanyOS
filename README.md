@@ -44,7 +44,8 @@ A provider-neutral operating system for a single command center covering exactly
 - Support Desk summarizes open workload and case age, refreshing agent-run progress automatically
 - Support case descriptions remain owner-only and are excluded from agent prompts
 - Owner-only financial ledger for income and expenses, with project/category/date attribution and auditable voiding
-- Owner-reviewed CSV import stages bank transactions, flags possible duplicates, and records entries only after a per-row owner decision
+- Owner-reviewed CSV import stages bank transactions with an inferred category, flags possible duplicates, and records entries only after a per-row owner decision
+- Reconciliation suggests near matches (same amount, close date, similar description) for owner confirmation, the Re-check matches button re-runs the exact-match check per batch, and the unmatched view lists staged rows and ledger entries with no match in one place
 - Recorded ledger totals feed month-to-date revenue and expense metrics; financial entries remain outside agent prompts
 - Finance agent may propose a sales-income entry from confirmed Gmail billing evidence; owner approval is required before ledger insertion
 - Sales agent can propose a lead from unread Gmail sales inquiries; owner approval creates the pipeline record and internal next-day follow-up

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query, transaction } from "@/lib/db";
+import { findNearMatch, inferImportCategory, type LedgerCandidate } from "@/lib/finance/reconcile";
 
 export const dynamic = "force-dynamic";
 const categories = new Set(["sales", "services", "subscriptions", "refund", "infrastructure", "software", "marketing", "operations", "taxes", "other"]);
@@ -117,18 +118,26 @@ function parseRows(csv: string) {
 export async function GET(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   if (!(await databaseAvailable())) return databaseUnavailable();
-  const [batches, rows] = await Promise.all([
+  const [batches, rows, ledger] = await Promise.all([
     query(`SELECT b.id,b.file_name,b.status,b.created_at::text,b.completed_at::text,
       COUNT(r.id)::int AS row_count,COUNT(r.id) FILTER (WHERE r.status='pending')::int AS pending_count,
       COUNT(r.id) FILTER (WHERE r.status='duplicate')::int AS duplicate_count,COUNT(r.id) FILTER (WHERE r.status='recorded')::int AS recorded_count
       FROM financial_import_batches b LEFT JOIN financial_import_rows r ON r.batch_id=b.id
       GROUP BY b.id ORDER BY b.created_at DESC LIMIT 12`),
-    query(`SELECT r.id,r.batch_id,b.file_name,r.row_number,r.project_id,p.name AS project_name,r.transaction_date::text,
+    query<{ id: string; batch_id: string; file_name: string; row_number: number; project_id: string | null; project_name: string | null; transaction_date: string; direction: "income" | "expense"; amount_cents: string; category: string; description: string; status: string; duplicate_note: string | null; transaction_id: string | null }>(`SELECT r.id,r.batch_id,b.file_name,r.row_number,r.project_id,p.name AS project_name,r.transaction_date::text,
       r.direction,r.amount_cents::text,r.category,r.description,r.status,r.duplicate_note,r.transaction_id
       FROM financial_import_rows r JOIN financial_import_batches b ON b.id=r.batch_id
       LEFT JOIN projects p ON p.id=r.project_id ORDER BY b.created_at DESC,r.row_number LIMIT 500`),
+    query<LedgerCandidate>(`SELECT id,transaction_date::text,direction,amount_cents::text,description
+      FROM financial_transactions WHERE status='recorded'`),
   ]);
-  return NextResponse.json({ batches: batches.rows, rows: rows.rows }, { headers: { "Cache-Control": "no-store" } });
+  // Pending rows that fail the exact fingerprint check still get a suggested
+  // near-match so the owner can confirm the pairing instead of guessing.
+  const enrichedRows = rows.rows.map((row) => ({
+    ...row,
+    suggested_match: row.status === "pending" ? findNearMatch(row, ledger.rows) : null,
+  }));
+  return NextResponse.json({ batches: batches.rows, rows: enrichedRows }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function POST(request: Request) {
@@ -160,7 +169,7 @@ export async function POST(request: Request) {
         const duplicate = known.has(row.fingerprint);
         if (duplicate) duplicateCount += 1;
         await client.query(`INSERT INTO financial_import_rows (batch_id,row_number,project_id,transaction_date,direction,amount_cents,category,description,fingerprint,status,duplicate_note)
-          VALUES ($1,$2,$3,$4,$5,$6,'other',$7,$8,$9,$10)`, [batchId,row.rowNumber,projectId,row.transactionDate,row.direction,row.amountCents,row.description,row.fingerprint,duplicate ? "duplicate" : "pending",duplicate ? "Matches an existing ledger or staged import row." : null]);
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [batchId,row.rowNumber,projectId,row.transactionDate,row.direction,row.amountCents,inferImportCategory(row.description, row.direction),row.description,row.fingerprint,duplicate ? "duplicate" : "pending",duplicate ? "Matches an existing ledger or staged import row." : null]);
         known.add(row.fingerprint);
       }
       await client.query(`INSERT INTO events (source,event_type,title,severity,payload)
@@ -221,10 +230,11 @@ export async function PATCH(request: Request) {
   try {
     const body = await request.json();
     const rowId = typeof body?.row_id === "string" ? body.row_id : "";
-    const decision = body?.decision === "record" || body?.decision === "record_distinct" || body?.decision === "reject" ? body.decision : "";
+    const decision = body?.decision === "record" || body?.decision === "record_distinct" || body?.decision === "reject" || body?.decision === "mark_duplicate" ? body.decision : "";
+    const matchTransactionId = typeof body?.match_transaction_id === "string" ? body.match_transaction_id : "";
     const category = typeof body?.category === "string" ? body.category : "other";
     const projectId = typeof body?.project_id === "string" && body.project_id ? body.project_id : null;
-    if (!uuidPattern.test(rowId) || !decision || !categories.has(category) || (projectId && !uuidPattern.test(projectId))) {
+    if (!uuidPattern.test(rowId) || !decision || !categories.has(category) || (projectId && !uuidPattern.test(projectId)) || (decision === "mark_duplicate" && !uuidPattern.test(matchTransactionId))) {
       return NextResponse.json({ error: "Provide a valid row, decision, category, and optional project." }, { status: 400 });
     }
     const outcome = await transaction(async (client) => {
@@ -234,6 +244,17 @@ export async function PATCH(request: Request) {
       );
       const row = selected.rows[0];
       if (!row || !["pending", "duplicate"].includes(row.status)) return { error: "Import row is no longer awaiting review." };
+      if (decision === "mark_duplicate") {
+        if (row.status !== "pending") return { error: "Only a pending row can be matched to a ledger entry." };
+        const match = await client.query<{ id: string; transaction_date: string; description: string }>(
+          "SELECT id,transaction_date::text,description FROM financial_transactions WHERE id=$1 AND status='recorded'", [matchTransactionId],
+        );
+        if (!match.rows[0]) return { error: "The suggested ledger entry no longer exists." };
+        const note = `Matched by owner to a ledger entry on ${match.rows[0].transaction_date}: ${match.rows[0].description}`.slice(0, 500);
+        await client.query("UPDATE financial_import_rows SET status='duplicate',duplicate_note=$2,transaction_id=$3,updated_at=NOW() WHERE id=$1", [rowId, note, matchTransactionId]);
+        await updateBatchStatus(client, row.batch_id);
+        return { status: "duplicate" as const, transaction_id: matchTransactionId };
+      }
       if (decision === "reject") {
         await client.query("UPDATE financial_import_rows SET status='rejected',updated_at=NOW() WHERE id=$1", [rowId]);
         await updateBatchStatus(client, row.batch_id);
