@@ -183,6 +183,24 @@ export type BrandKit = {
   updated_at?: string | null;
 };
 
+export type ContentItem = {
+  id: string;
+  project_id?: string;
+  project_name?: string;
+  type: "post" | "reel" | "story" | "article";
+  title: string;
+  caption: string;
+  image_prompt: string;
+  image_url: string;
+  image_options: string[];
+  status: "draft" | "in_review" | "approved" | "scheduled" | "published";
+  scheduled_for: string | null;
+  published_url: string;
+  created_by: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type DashboardData = {
   source: "database" | "demo";
   generated_at: string;
