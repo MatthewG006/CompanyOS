@@ -53,6 +53,7 @@ function money(valueCents: string) {
 
 export function SalesPipeline({ projects, authRequired }: { projects: Project[]; authRequired: boolean }) {
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, LeadDraft>>({});
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -68,10 +69,11 @@ export function SalesPipeline({ projects, authRequired }: { projects: Project[];
     const loaded = (body.leads ?? []) as Lead[];
     setLeads(loaded);
     setDrafts(Object.fromEntries(loaded.map((lead) => [lead.id, toDraft(lead)])));
+    setLoaded(true);
   }, [headers]);
 
   useEffect(() => {
-    void refresh().catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Could not load sales opportunities."));
+    void refresh().catch((error: unknown) => { setMessage(error instanceof Error ? error.message : "Could not load sales opportunities."); setLoaded(true); });
   }, [refresh]);
 
   const totals = useMemo(() => leads.reduce((summary, lead) => {
@@ -196,7 +198,7 @@ export function SalesPipeline({ projects, authRequired }: { projects: Project[];
             <button type="button" className="refresh-button" disabled={busy} onClick={() => void saveLead(lead)}>{busy ? "Saving…" : "Save changes"}</button>
           </div>
         </article>;
-      }) : <div className="panel empty-state">No opportunities yet. Add the first lead above.</div>}
+      }) : loaded ? <div className="panel empty-state">No opportunities yet. Add the first lead above.</div> : <div className="panel empty-state">Loading opportunities…</div>}
     </section>
   </div>;
 }

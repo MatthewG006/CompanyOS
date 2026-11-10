@@ -7,6 +7,7 @@ type Memory = { project_id: string; project_name: string; title: string | null; 
 
 export function ProjectMemoryEditor({ projects, authRequired }: { projects: Project[]; authRequired: boolean }) {
   const [memories, setMemories] = useState<Memory[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [contents, setContents] = useState<Record<string, string>>({});
   const [adminToken, setAdminToken] = useState("");
@@ -23,13 +24,14 @@ export function ProjectMemoryEditor({ projects, authRequired }: { projects: Proj
     const body = await response.json();
     if (!response.ok) throw new Error(body.error ?? "Could not load project memory.");
     const records = (body.memories ?? []) as Memory[];
+    setLoaded(true);
     setMemories(records);
     setTitles(Object.fromEntries(records.map((record) => [record.project_id, record.title ?? "Shared project memory"])));
     setContents(Object.fromEntries(records.map((record) => [record.project_id, record.content ?? ""])));
   }, [headers]);
 
   useEffect(() => {
-    void refresh().catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Could not load project memory."));
+    void refresh().catch((error: unknown) => { setMessage(error instanceof Error ? error.message : "Could not load project memory."); setLoaded(true); });
   }, [refresh]);
 
   async function save(project: Project) {
@@ -60,10 +62,10 @@ export function ProjectMemoryEditor({ projects, authRequired }: { projects: Proj
       const record = memories.find((memory) => memory.project_id === project.id);
       const content = contents[project.id] ?? "";
       return <article className="project-memory-item" key={project.id}>
-        <div className="project-memory-heading"><div><strong>{project.name}</strong><span>{record?.updated_at ? `Updated ${new Date(record.updated_at).toLocaleString()}` : "No saved memory"}</span></div>
-          <button type="button" className="refresh-button" disabled={savingProject !== "" || content.trim().length === 0 || content.length > 5000 || (authRequired && !adminToken)} onClick={() => void save(project)}>{savingProject === project.id ? "Saving…" : "Save memory"}</button></div>
-        <label className="router-field">Memory title<input maxLength={120} value={titles[project.id] ?? "Shared project memory"} onChange={(event) => setTitles((current) => ({ ...current, [project.id]: event.target.value }))} /></label>
-        <label className="router-field">Owner notes<textarea maxLength={5000} value={content} onChange={(event) => setContents((current) => ({ ...current, [project.id]: event.target.value }))} placeholder="Goals, decisions, product context, and stable business facts for this project." /></label>
+        <div className="project-memory-heading"><div><strong>{project.name}</strong><span>{!loaded ? "Loading…" : record?.updated_at ? `Updated ${new Date(record.updated_at).toLocaleString()}` : "No saved memory"}</span></div>
+          <button type="button" className="refresh-button" disabled={!loaded || savingProject !== "" || content.trim().length === 0 || content.length > 5000 || (authRequired && !adminToken)} onClick={() => void save(project)}>{savingProject === project.id ? "Saving…" : "Save memory"}</button></div>
+        <label className="router-field">Memory title<input maxLength={120} disabled={!loaded} value={titles[project.id] ?? "Shared project memory"} onChange={(event) => setTitles((current) => ({ ...current, [project.id]: event.target.value }))} /></label>
+        <label className="router-field">Owner notes<textarea maxLength={5000} disabled={!loaded} value={content} onChange={(event) => setContents((current) => ({ ...current, [project.id]: event.target.value }))} placeholder="Goals, decisions, product context, and stable business facts for this project." /></label>
         <div className="memory-character-count">{content.length.toLocaleString()} / 5,000 characters</div>
       </article>;
     })}</div>

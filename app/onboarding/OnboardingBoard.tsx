@@ -9,6 +9,7 @@ const statusLabels: Record<Step["status"], string> = { todo: "To do", in_progres
 
 export function OnboardingBoard({ authRequired }: { authRequired: boolean }) {
   const [items, setItems] = useState<Onboarding[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [token, setToken] = useState("");
   const [busyStep, setBusyStep] = useState("");
   const [message, setMessage] = useState("");
@@ -19,10 +20,11 @@ export function OnboardingBoard({ authRequired }: { authRequired: boolean }) {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error ?? "Could not load onboarding records.");
     setItems((body.onboardings ?? []) as Onboarding[]);
+    setLoaded(true);
   }, [headers]);
 
   useEffect(() => {
-    void refresh().catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Could not load onboarding records."));
+    void refresh().catch((error: unknown) => { setMessage(error instanceof Error ? error.message : "Could not load onboarding records."); setLoaded(true); });
   }, [refresh]);
 
   async function updateStep(step: Step, status: Step["status"]) {
@@ -56,6 +58,6 @@ export function OnboardingBoard({ authRequired }: { authRequired: boolean }) {
           </select>
         </div>)}</div>
       </section>;
-    })}</div> : <div className="panel empty-state">No customer onboardings yet. Mark a sales opportunity Won to create its onboarding checklist.</div>}
+    })}</div> : loaded ? <div className="panel empty-state">No customer onboardings yet. Mark a sales opportunity Won to create its onboarding checklist.</div> : <div className="panel empty-state">Loading onboardings…</div>}
   </div>;
 }

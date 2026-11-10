@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DashboardData } from "@/lib/types";
 import { ApprovalList } from "./ApprovalList";
 import { CommandBar } from "./CommandBar";
+import { DemoBanner } from "./DemoBanner";
 import { MetricCard } from "./MetricCard";
 import { ProjectCard } from "./ProjectCard";
 import { StatusDot } from "./StatusDot";
@@ -60,6 +61,7 @@ export function LiveOverview({ initial }: { initial: DashboardData }) {
   }, [refresh]);
 
   return <div className="page-wrap">
+    <DemoBanner source={data.source} />
     <header className="topbar">
       <div>
         <div className="eyebrow">COMMAND CENTER</div>

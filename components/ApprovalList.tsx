@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Approval } from "@/lib/types";
 import { StatusDot } from "./StatusDot";
 
@@ -10,6 +10,15 @@ export function ApprovalList({ initial }: { initial: Approval[] }) {
   const [message, setMessage] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState(false);
   const [adminToken, setAdminToken] = useState("");
+
+  // The Overview polls every 30s and passes fresh approvals in as `initial`.
+  // Sync to them so new approvals appear without a manual reload. Skip the
+  // sync while a decision is in flight: a poll that started before the
+  // approve/reject committed could otherwise resurrect the item just decided.
+  useEffect(() => {
+    if (busy !== null) return;
+    setItems(initial);
+  }, [initial, busy]);
 
   async function decide(id: string, status: "approved" | "rejected") {
     setBusy(id);
