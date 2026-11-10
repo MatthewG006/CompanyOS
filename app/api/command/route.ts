@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { databaseAvailable, query } from "@/lib/db";
+import { databaseAvailable, query, transaction } from "@/lib/db";
 import { getDashboardData } from "@/lib/data";
+import { queueTaskExecution } from "@/lib/ai/queue-task-run";
 import {
   buildExplicitTaskDraft,
   buildInferredTaskDraft,
@@ -52,7 +53,20 @@ export async function POST(request: Request) {
         `INSERT INTO events (source,event_type,title,severity,payload) VALUES ('command-center','task_created',$1,'info',$2::jsonb)`,
         [`Task created: ${draft.title}`, JSON.stringify({ task_id: inserted.rows[0].id, agent: draft.agent?.name, project: draft.project?.name })]
       );
-      message = `Created task: "${draft.title}"${draft.agent ? ` (Assigned to ${draft.agent.name})` : ""}${draft.project ? ` for ${draft.project.name}` : ""}. Open Agents or Tasks to run it.`;
+      const assigneeId = draft.agent?.id;
+      if (assigneeId) {
+        await transaction(async (client) => {
+          await queueTaskExecution(client, {
+            projectId: draft.project?.id ?? null,
+            agentId: assigneeId,
+            taskId: inserted.rows[0].id,
+            title: draft.title,
+            priority: "normal",
+            source: "owner_command",
+          });
+        });
+      }
+      message = `Created task: "${draft.title}"${draft.agent ? ` (Assigned to ${draft.agent.name})` : ""}${draft.project ? ` for ${draft.project.name}` : ""}.${draft.agent ? " It is queued for autonomous execution by the Codex CLI worker." : ""}`;
       route = "task-create";
     };
 

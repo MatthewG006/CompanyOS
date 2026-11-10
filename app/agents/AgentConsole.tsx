@@ -24,7 +24,6 @@ type AgentRun = {
   retry_status: string | null;
 };
 type RunCounts = { queued?: number; running?: number; completed?: number; failed?: number; awaiting_external?: number; expired?: number };
-type ProviderStatus = { installed: boolean; authenticated: boolean; message: string };
 type AgentWorkerStatus = { status: string; details: { codex_cli_authenticated?: boolean }; last_seen_at: string; online: boolean };
 
 const providerLabels: Record<Provider, string> = {
@@ -45,16 +44,10 @@ const providerExternalUrls: Record<string, string> = {
 };
 
 export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "database" | "demo" }) {
-  const [taskId, setTaskId] = useState(tasks[0]?.id ?? "");
-  const [provider, setProvider] = useState<Provider>("auto");
-  const [manualFallback, setManualFallback] = useState<"chatgpt-free" | "claude-free" | "codex">("chatgpt-free");
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [runQuery, setRunQuery] = useState("");
   const filteredRuns = runs.filter((run) => matchesQuery(runQuery, run.task_title, run.agent_name, run.provider, run.status, run.summary, run.error));
   const [runCounts, setRunCounts] = useState<RunCounts>({});
-  const [localCap, setLocalCap] = useState<{ limit: number; used: number; capped: boolean } | null>(null);
-  const [configured, setConfigured] = useState<Partial<Record<Provider, boolean>>>({});
-  const [codexStatus, setCodexStatus] = useState<ProviderStatus | null>(null);
   const [workerStatus, setWorkerStatus] = useState<AgentWorkerStatus | null>(null);
   const [authRequired, setAuthRequired] = useState(false);
   const { token: adminToken, setToken: setAdminToken } = useAdminToken();
@@ -94,9 +87,6 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
     }
     if (!response.ok) throw new Error(body.error ?? "Could not load agent runs.");
     setAuthRequired(Boolean(body.auth_required));
-    setConfigured(body.providers ?? {});
-    setLocalCap(body.local_cap ?? null);
-    setCodexStatus(body.provider_status?.["codex-cli"] ?? null);
     setWorkerStatus(body.agent_worker ?? null);
     setRuns(body.runs ?? []);
     setRunCounts(body.run_counts ?? {});
@@ -108,26 +98,6 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
   }, [refresh]);
 
   usePolling(refresh, 8000);
-
-  async function runNextQueued() {
-    setBusy(true);
-    setQueueMessage("");
-    try {
-      const response = await fetch("/api/agent-runs/worker", { method: "POST", headers: requestHeaders(), body: "{}" });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error ?? "Could not run queued agent work.");
-      if (body.worked) {
-        setQueueMessage(`Queued run ${body.status}.${body.approval_proposals ? ` ${body.approval_proposals} proposed action(s) are waiting for owner approval.` : " Results are saved in run history."}`);
-      } else {
-        setQueueMessage("The queue is empty. Sync Gmail or assign an open task to an agent first.");
-      }
-      await refresh();
-    } catch (error) {
-      setQueueMessage(error instanceof Error ? error.message : "Could not run queued agent work.");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function retryFailedRun(run: AgentRun) {
     setBusy(true);
@@ -146,44 +116,6 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
       await refresh();
     } catch (error) {
       setQueueMessage(error instanceof Error ? error.message : "Could not queue the failed run again.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function startRun(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!taskId) return;
-    setBusy(true);
-    setMessage("");
-    setPrompt("");
-    setActiveRunId("");
-    try {
-      const payload: { task_id: string; provider: Provider; manual_provider?: string } = {
-        task_id: taskId,
-        provider,
-      };
-      if (provider === "auto") {
-        payload.manual_provider = manualFallback;
-      }
-      const response = await fetch("/api/agent-runs", { method: "POST", headers: requestHeaders(), body: JSON.stringify(payload) });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error ?? "Task run failed.");
-      if (body.status === "awaiting_external") {
-        const handoff = (body.provider ?? provider) as Provider;
-        setPrompt(body.prompt);
-        setActiveRunId(body.run_id);
-        setActiveProvider(handoff);
-        const fellBack = Array.isArray(body.attempts) && body.attempts.length > 0;
-        setMessage(`${fellBack ? "Automatic providers were unavailable or failed. " : ""}Prompt prepared for ${providerLabels[handoff] ?? handoff}. Copy it or open the service below, then submit its response.`);
-      } else {
-        const proposalNotice = body.approval_proposals ? ` ${body.approval_proposals} follow-up task proposal(s) are waiting for owner approval on the dashboard.` : "";
-        setMessage(`Run completed with ${providerLabels[body.provider as Provider] ?? body.provider} (${body.model}). The result is saved in CompanyOS.${proposalNotice}`);
-      }
-      await refresh();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not start task run.");
-      await refresh().catch(() => undefined);
     } finally {
       setBusy(false);
     }
@@ -211,7 +143,6 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
   function resumeHandoff(run: AgentRun) {
     setActiveRunId(run.id);
     setPrompt(run.input?.prompt ?? "");
-    setProvider(run.provider);
     setActiveProvider(run.provider);
     setMessage(`This manual handoff (${providerLabels[run.provider] ?? run.provider}) is awaiting a response. Continue with the saved prompt below.`);
   }
@@ -243,73 +174,13 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
     }
   }
 
-  async function selectTaskAndDispatch(selectedTaskId: string, preferredProvider?: Provider) {
-    setTaskId(selectedTaskId);
-    const targetProvider = preferredProvider ?? provider;
-    if (preferredProvider) {
-      setProvider(preferredProvider);
-    }
-    setBusy(true);
-    setMessage("");
-    setPrompt("");
-    setActiveRunId("");
-    try {
-      const payload: { task_id: string; provider: Provider; manual_provider?: string } = {
-        task_id: selectedTaskId,
-        provider: targetProvider,
-      };
-      if (targetProvider === "auto") {
-        payload.manual_provider = manualFallback;
-      }
-      const response = await fetch("/api/agent-runs", { method: "POST", headers: requestHeaders(), body: JSON.stringify(payload) });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error ?? "Task run failed.");
-
-      if (body.status === "queued" || body.status === "running") {
-        // Automatically attempt worker execution for queued runs
-        try {
-          const workerRes = await fetch("/api/agent-runs/worker", { method: "POST", headers: requestHeaders(), body: "{}" });
-          const workerBody = await workerRes.json();
-          if (workerRes.ok && workerBody.worked) {
-            setMessage(`Task dispatched & worker completed run: ${workerBody.status}.${workerBody.approval_proposals ? ` ${workerBody.approval_proposals} proposed action(s) created.` : ""}`);
-          } else {
-            setMessage("Task dispatched and queued for processing.");
-          }
-        } catch {
-          setMessage("Task dispatched and queued for background worker.");
-        }
-      } else if (body.status === "awaiting_external") {
-        const handoff = (body.provider ?? targetProvider) as Provider;
-        setPrompt(body.prompt);
-        setActiveRunId(body.run_id);
-        setActiveProvider(handoff);
-        const fellBack = Array.isArray(body.attempts) && body.attempts.length > 0;
-        setMessage(`${fellBack ? "Automatic providers were unavailable or failed. " : ""}Prompt prepared for ${providerLabels[handoff] ?? handoff}. Copy it or open the service below, then submit its response.`);
-      } else {
-        const proposalNotice = body.approval_proposals ? ` ${body.approval_proposals} follow-up task proposal(s) are waiting for owner approval on the dashboard.` : "";
-        setMessage(`Run completed with ${providerLabels[body.provider as Provider] ?? body.provider} (${body.model}). The result is saved in CompanyOS.${proposalNotice}`);
-      }
-      await refresh();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not start task run.");
-      await refresh().catch(() => undefined);
-    } finally {
-      setBusy(false);
-    }
-
-    const targetElement = document.getElementById("task-runner-form");
-    if (targetElement) {
-      targetElement.scrollIntoView({ behavior: "smooth" });
-    }
-  }
-
   return <>
     {boardTasks.length > 0 ? (
       <section className="panel task-board-panel" style={{ marginBottom: "1.5rem" }}>
         <div className="panel-head">
           <div>
-            <h2>Open tasks & AI dispatch</h2>
-            <p className="muted">Directly dispatch any open project task to its assigned AI agent or provider.</p>
+            <h2>Open tasks</h2>
+            <p className="muted">Tasks are worked autonomously: when a task is created or approved, it is queued for its agent and the Codex CLI worker picks it up. No dispatch step.</p>
           </div>
           <span className="data-source">{boardTasks.length > 8 ? `SHOWING 8 OF ${boardTasks.length} OPEN TASKS` : `${boardTasks.length} OPEN TASKS`}</span>
         </div>
@@ -329,14 +200,6 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
                 <button
                   type="button"
                   className="refresh-button"
-                  style={{ fontSize: "0.85rem", whiteSpace: "nowrap" }}
-                  onClick={() => selectTaskAndDispatch(task.id)}
-                >
-                  Select & dispatch →
-                </button>
-                <button
-                  type="button"
-                  className="refresh-button"
                   style={{ fontSize: "0.85rem", whiteSpace: "nowrap", opacity: 0.8 }}
                   onClick={() => markTaskComplete(task.id)}
                   title="Mark task as completed"
@@ -350,38 +213,16 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
       </section>
     ) : null}
 
-    <section className="panel agent-run-panel" id="task-runner-form">
-      <div className="panel-head">
-        <div>
-          <h2>Dispatch a task</h2>
-          <p className="muted">Runs receive the assigned agent’s scoped project memory. Manual handoffs let ChatGPT Free, Claude Free, and Codex process tasks without API credentials.</p>
-        </div>
-        <span className="data-source">{source === "database" ? "POSTGRESQL" : "DEMO MODE"}</span>
-      </div>
-      {authRequired ? <AdminTokenField /> : null}
-      <form className="router-form" onSubmit={startRun}>
-        <label className="router-field">Open task<select value={taskId} onChange={(event) => setTaskId(event.target.value)} disabled={source !== "database" || boardTasks.length === 0}>
-          {boardTasks.map((task) => <option key={task.id} value={task.id}>{task.title}{task.project_name ? ` · ${task.project_name}` : ""}{task.agent_name ? ` (${task.agent_name})` : ""}</option>)}
-        </select></label>
-        <label className="router-field">Execution provider<select value={provider} onChange={(event) => setProvider(event.target.value as Provider)}>
-          {(Object.keys(providerLabels) as Provider[]).map((key) => <option key={key} value={key} disabled={configured[key] === false}>{providerLabels[key]}{["openai", "anthropic", "ollama"].includes(key) && configured[key] === false ? " · configure server" : key === "codex-cli" && configured[key] === false ? " · sign in required" : ""}</option>)}
-        </select></label>
-        {provider === "auto" ? (
-          <label className="router-field">
-            Manual fallback if auto-routing unavailable
-            <select value={manualFallback} onChange={(event) => setManualFallback(event.target.value as "chatgpt-free" | "claude-free" | "codex")}>
-              <option value="chatgpt-free">ChatGPT Free (Manual handoff)</option>
-              <option value="claude-free">Claude Free (Manual handoff)</option>
-              <option value="codex">Codex (Manual handoff)</option>
-            </select>
-          </label>
-        ) : null}
-        <button type="submit" className="refresh-button router-submit" disabled={busy || source !== "database" || !boardTasks.length}>{busy ? "Working…" : "Dispatch task"}</button>
-      </form>
-      {provider === "codex-cli" && codexStatus && !codexStatus.authenticated ? <p className="inline-message" role="status">{codexStatus.message}</p> : null}
-      {source !== "database" ? <p className="inline-message">Connect PostgreSQL to run and save tasks.</p> : null}
-      {message ? <p className="inline-message" role="status">{message}</p> : null}
-      {prompt ? <div className="manual-handoff">
+    {authRequired || message ? (
+      <section className="panel agent-run-panel">
+        {authRequired ? <AdminTokenField /> : null}
+        {message ? <p className="inline-message" role="status">{message}</p> : null}
+      </section>
+    ) : null}
+
+    {prompt ? (
+      <section className="panel manual-handoff-panel">
+        <div className="manual-handoff">
         <div className="panel-head">
           <div>
             <h3>Manual handoff: {providerLabels[activeProvider] ?? activeProvider}</h3>
@@ -412,14 +253,15 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
           </label>
           <button type="submit" className="refresh-button" disabled={busy || !manualOutput.trim()}>{busy ? "Saving…" : "Save response & evaluate proposals"}</button>
         </form>
-      </div> : null}
-    </section>
+        </div>
+      </section>
+    ) : null}
 
     <section className="panel agent-run-history">
       <div className="panel-head">
         <div>
           <h2>Agent execution queue & history</h2>
-          <p className="muted">Queued work is claimed by the agent worker: Codex CLI first, then local Ollama. This view refreshes automatically.</p>
+          <p className="muted">Every approved or newly created task is queued automatically and claimed by the Codex CLI worker — no dispatch step. This view refreshes automatically.</p>
           <div className={`worker-status ${workerStatus?.online ? "online" : "offline"}`}>
             <span />
             {workerStatus?.online ? `Worker online · Codex CLI ${workerStatus.details.codex_cli_authenticated ? "signed in" : "needs sign-in"}` : "Worker offline"}
@@ -427,14 +269,6 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
           </div>
         </div>
         <div className="run-toolbar">
-          <button
-            type="button"
-            className="refresh-button"
-            onClick={() => void runNextQueued()}
-            disabled={busy || source !== "database"}
-          >
-            {busy ? "Working…" : "Run next queued task"}
-          </button>
           <button type="button" className="refresh-button" onClick={() => void refresh()} disabled={busy}>Refresh</button>
         </div>
       </div>
@@ -446,7 +280,6 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
         <div><span>Failed</span><strong>{runCounts.failed ?? 0}</strong></div>
         <div><span>Awaiting handoff</span><strong>{runCounts.awaiting_external ?? 0}</strong></div>
         <div><span>Expired handoffs</span><strong>{runCounts.expired ?? 0}</strong></div>
-        {configured.ollama && localCap && localCap.limit > 0 ? <div><span>Local runs (1h)</span><strong>{localCap.used}/{localCap.limit}{localCap.capped ? " · paused" : ""}</strong></div> : null}
       </section>
       {queueMessage ? <p className="inline-message" role="status">{queueMessage}</p> : null}
       <div className="list-head-tools run-search-row"><div className="subsection-title">Recent runs</div><ListSearch value={runQuery} onChange={setRunQuery} placeholder="Search runs…" /></div>

@@ -124,6 +124,7 @@ For GitHub, Proxmox, Nextcloud, n8n and Firebase event ingestion, see `docs/inte
 - Live panels (Overview, Support, Workflows, AI Workforce) pause their auto-refresh while the tab is hidden and refresh as soon as you return, so the numbers are never stale on sight.
 - The AI Workforce page leads with the task console; agent policies live at the bottom. The task board refreshes itself and says when it is showing the first 8 of more open tasks.
 - The ledger, support cases, sales pipeline, and agent run history each have a search box that filters as you type.
+- Codex CLI is the autonomous operator for every role: when an agent proposes a task and the owner approves it — or the owner creates a task for an agent — the execution run is queued automatically and the agent worker carries it out. There is no manual dispatch step; the AI Workforce page is a live view of the queue and history. Roles configured for a manual handoff provider (ChatGPT Free, Claude Free, manual Codex) still wait for the owner to paste the response, since those subscriptions are owner-mediated.
 - Under the hood, each page loads only the data it renders (per-domain loaders in `lib/data.ts`), and API routes share one error helper (`lib/api-errors.ts`) so every error has the same `{ error }` shape.
 
 ## APIs
