@@ -148,6 +148,18 @@ After connecting Google, open `/communications` and use **Sync configured**. Gma
 
 `npm run lint` uses Biome's linter-only command so CI does not fail on formatting or assist suggestions. Use `npm run format` when you want Biome to format code and apply safe fixes.
 
+## Continuous integration
+
+GitHub Actions runs the `CI` workflow (`.github/workflows/ci.yml`) on every pull request and on every push to `main`. The single verify job installs dependencies with `npm ci` on Node.js 24, then runs the same commands used locally:
+
+```powershell
+npm run lint
+npm run typecheck
+npm test
+```
+
+`npm run typecheck` runs `tsc --noEmit`. The database integration tests skip automatically when `DATABASE_URL` is not set, in CI just as they do locally, so the workflow needs no secrets or services.
+
 
 ## v0.4 Intelligence layer
 
