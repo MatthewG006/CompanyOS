@@ -8,7 +8,8 @@ type Project = { id: string; name: string };
 type Totals = { income_cents: string; expense_cents: string };
 type Entry = { id: string; project_id: string | null; project_name: string | null; source_attention_item_id: string | null; source_import_row_id: string | null; transaction_date: string; direction: "income" | "expense"; amount_cents: string; category: string; description: string; status: "recorded" | "void" };
 type ImportBatch = { id: string; file_name: string; status: string; row_count: number; pending_count: number; duplicate_count: number; recorded_count: number; created_at: string };
-type ImportRow = { id: string; batch_id: string; file_name: string; row_number: number; project_id: string | null; project_name: string | null; transaction_date: string; direction: "income" | "expense"; amount_cents: string; category: string; description: string; status: "pending" | "duplicate" | "recorded" | "rejected"; duplicate_note: string | null; transaction_id: string | null };
+type SuggestedMatch = { transaction_id: string; transaction_date: string; description: string; amount_cents: string; reason: string };
+type ImportRow = { id: string; batch_id: string; file_name: string; row_number: number; project_id: string | null; project_name: string | null; transaction_date: string; direction: "income" | "expense"; amount_cents: string; category: string; description: string; status: "pending" | "duplicate" | "recorded" | "rejected"; duplicate_note: string | null; transaction_id: string | null; suggested_match: SuggestedMatch | null };
 const categories = ["sales", "services", "subscriptions", "refund", "infrastructure", "software", "marketing", "operations", "taxes", "other"];
 const today = () => { const date = new Date(); return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10); };
 const money = (cents: string | number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Number(cents) / 100);
@@ -20,6 +21,8 @@ export function FinanceLedger({ authRequired }: { authRequired: boolean }) {
   const [loaded, setLoaded] = useState(false);
   const [importBatches, setImportBatches] = useState<ImportBatch[]>([]);
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
+  const unmatchedImportRows = importRows.filter((row) => row.status === "pending" && !row.suggested_match);
+  const unmatchedLedgerEntries = entries.filter((entry) => entry.status === "recorded" && !entry.source_import_row_id);
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [importProjectId, setImportProjectId] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
@@ -95,6 +98,35 @@ export function FinanceLedger({ authRequired }: { authRequired: boolean }) {
     } finally { setBusy(false); }
   }
 
+  async function recheckBatch(batch: ImportBatch) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/finance/imports", { method: "PUT", headers: headers(), body: JSON.stringify({ batch_id: batch.id }) });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Could not re-check import batch.");
+      setMessage(body.reconciled_duplicates ? `Re-check complete: ${body.reconciled_duplicates} pending row(s) matched existing ledger entries and were flagged as duplicates.` : "Re-check complete: no new exact matches. Near matches, if any, are suggested in the review list below.");
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not re-check import batch.");
+    } finally { setBusy(false); }
+  }
+
+  async function markDuplicate(row: ImportRow) {
+    if (!row.suggested_match) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/finance/imports", { method: "PATCH", headers: headers(), body: JSON.stringify({ row_id: row.id, decision: "mark_duplicate", match_transaction_id: row.suggested_match.transaction_id, category: row.category, project_id: row.project_id || null }) });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Could not match import row.");
+      setMessage("Import row matched to the existing ledger entry and flagged as a duplicate.");
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not match import row.");
+    } finally { setBusy(false); }
+  }
+
   async function reviewImportRow(row: ImportRow, decision: "record" | "record_distinct" | "reject") {
     if (decision === "record_distinct" && !window.confirm("This row matches a ledger transaction. Record it as a separate, distinct transaction anyway?")) return;
     setBusy(true);
@@ -135,14 +167,25 @@ export function FinanceLedger({ authRequired }: { authRequired: boolean }) {
       <div className="panel-head"><div><h2>Import bank CSV</h2><p className="muted">CSV rows are staged only. Nothing enters the ledger until you review and record each row.</p></div><span className="data-source">OWNER REVIEW</span></div>
       <div className="ledger-import-form"><label className="router-field">CSV file<input id="finance-csv-file" type="file" accept=".csv,text/csv" onChange={(event) => setCsvFile(event.target.files?.[0] ?? null)} /></label><label className="router-field">Default project<select value={importProjectId} onChange={(event) => setImportProjectId(event.target.value)}><option value="">Company-wide</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><button type="button" className="refresh-button" disabled={busy || !csvFile || (authRequired && !token)} onClick={() => void stageCsv()}>{busy ? "Working…" : "Preview CSV rows"}</button></div>
       <p className="muted import-help">Accepts Date, Description, Amount (negative expenses and positive income), or Date, Description, Debit, Credit. Supports ISO or US dates. Maximum 500 rows / 500 KB.</p>
-      <div className="ledger-import-batches">{importBatches.slice(0, 6).map((batch) => <div className="ledger-import-batch" key={batch.id}><div><strong>{batch.file_name}</strong><span>{batch.row_count} rows · {batch.pending_count} awaiting · {batch.duplicate_count} possible duplicates · {batch.recorded_count} recorded</span></div><span className="data-source">{batch.status}</span></div>)}</div>
+      <div className="ledger-import-batches">{importBatches.slice(0, 6).map((batch) => <div className="ledger-import-batch" key={batch.id}><div><strong>{batch.file_name}</strong><span>{batch.row_count} rows · {batch.pending_count} awaiting · {batch.duplicate_count} possible duplicates · {batch.recorded_count} recorded</span></div><div className="ledger-import-batch-actions"><span className="data-source">{batch.status}</span><button type="button" className="refresh-button" disabled={busy || (authRequired && !token)} onClick={() => void recheckBatch(batch)}>Re-check matches</button></div></div>)}</div>
       <div className="ledger-import-rows">{importRows.filter((row) => ["pending", "duplicate"].includes(row.status)).map((row) => <article className={`ledger-import-row ${row.status}`} key={row.id}>
-        <div className="ledger-import-row-main"><span className="sales-project-label">{row.file_name} · row {row.row_number} · {row.transaction_date}</span><strong>{row.description}</strong><span>{row.direction === "expense" ? "−" : "+"}{money(row.amount_cents)}</span>{row.duplicate_note ? <small>{row.duplicate_note}</small> : null}</div>
+        <div className="ledger-import-row-main"><span className="sales-project-label">{row.file_name} · row {row.row_number} · {row.transaction_date}</span><strong>{row.description}</strong><span>{row.direction === "expense" ? "−" : "+"}{money(row.amount_cents)}</span>{row.duplicate_note ? <small>{row.duplicate_note}</small> : null}{row.suggested_match ? <div className="ledger-suggestion"><span>Possible ledger match: {row.suggested_match.description || row.suggested_match.transaction_id} · {row.suggested_match.transaction_date} · {money(row.suggested_match.amount_cents)} ({row.suggested_match.reason})</span><button className="refresh-button" type="button" disabled={busy} onClick={() => void markDuplicate(row)}>Mark as duplicate</button></div> : null}</div>
         <label className="router-field">Category<select value={row.category} onChange={(event) => editImportRow(row.id, "category", event.target.value)}>{categories.map((category) => <option key={category} value={category}>{category}</option>)}</select></label>
         <label className="router-field">Project<select value={row.project_id ?? ""} onChange={(event) => editImportRow(row.id, "project_id", event.target.value)}><option value="">Company-wide</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
         <div className="ledger-import-actions">{row.status === "pending" ? <button className="refresh-button" type="button" disabled={busy} onClick={() => void reviewImportRow(row, "record")}>Record row</button> : <button className="refresh-button" type="button" disabled={busy} onClick={() => void reviewImportRow(row, "record_distinct")}>Record as distinct</button>}<button className="refresh-button" type="button" disabled={busy} onClick={() => void reviewImportRow(row, "reject")}>Reject</button></div>
       </article>)}</div>
       {!loaded ? <div className="empty-state">Loading imports…</div> : importRows.every((row) => !["pending", "duplicate"].includes(row.status)) ? <div className="empty-state">No imported rows are waiting for review.</div> : null}
+    </section>
+    <section className="panel ledger-reconcile-panel">
+      <div className="panel-head"><div><h2>Reconciliation</h2><p className="muted">Everything that has not been matched yet, in one place. Staged rows with a likely ledger match show a suggestion in the review list above instead.</p></div><span className="data-source">{unmatchedImportRows.length + unmatchedLedgerEntries.length} UNMATCHED</span></div>
+      <div className="ledger-reconcile-grid">
+        <div><h3>Staged rows with no match ({unmatchedImportRows.length})</h3>
+          {unmatchedImportRows.length ? unmatchedImportRows.slice(0, 10).map((row) => <div className="ledger-reconcile-item" key={row.id}><span>{row.transaction_date} · {row.file_name} · row {row.row_number}</span><strong>{row.description}</strong><span>{row.direction === "expense" ? "−" : "+"}{money(row.amount_cents)} · no exact or near match in the ledger</span></div>) : <p className="muted">Every staged row is resolved or has a match suggestion to review.</p>}
+        </div>
+        <div><h3>Ledger entries with no import match ({unmatchedLedgerEntries.length})</h3>
+          {unmatchedLedgerEntries.length ? unmatchedLedgerEntries.slice(0, 10).map((entry) => <div className="ledger-reconcile-item" key={entry.id}><span>{entry.transaction_date} · {entry.project_name ?? "Company-wide"} · {entry.category}</span><strong>{entry.description || entry.category}</strong><span>{entry.direction === "expense" ? "−" : "+"}{money(entry.amount_cents)} · not linked to any import row</span></div>) : <p className="muted">Every recorded ledger entry came from a reviewed import row.</p>}
+        </div>
+      </div>
     </section>
     <section className="ledger-list"><div className="section-title-row"><div><h2>Recent ledger entries</h2><p>Up to 200 most recent entries.</p></div><div className="list-head-tools"><ListSearch value={entryQuery} onChange={setEntryQuery} placeholder="Search entries…" /><div className="data-source">{filteredEntries.length === entries.length ? `${entries.length} ENTRIES` : `${filteredEntries.length} OF ${entries.length} ENTRIES`}</div></div></div>
       {filteredEntries.length ? filteredEntries.map((entry) => <article className={`panel ledger-entry ${entry.status}`} key={entry.id}>

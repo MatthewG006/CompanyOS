@@ -383,6 +383,13 @@ button, input { font: inherit; }
 .ledger-import-row-main > span:not(.sales-project-label),.ledger-import-row-main small { color:#8390a9; font-size:10px; }
 .ledger-import-actions { display:flex; gap:6px; flex-wrap:wrap; }
 .ledger-import-actions button { min-width:88px; }
+.ledger-import-batch-actions { display:flex; align-items:center; gap:8px; }
+.ledger-suggestion { display:grid; gap:6px; justify-items:start; margin-top:6px; padding:8px; border:1px dashed rgba(242,184,75,.45); border-radius:8px; }
+.ledger-suggestion span { color:#e8c87a; font-size:11px; }
+.ledger-reconcile-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.ledger-reconcile-grid h3 { margin:0 0 6px; font-size:12px; }
+.ledger-reconcile-item { display:grid; gap:2px; padding:8px 0; border-bottom:1px solid var(--border); overflow-wrap:anywhere; }
+.ledger-reconcile-item span { color:#8390a9; font-size:10px; }
 .ledger-create-panel .panel-head p { margin:5px 0 0; }
 .ledger-form { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; align-items:end; margin-top:14px; }
 .ledger-form input,.ledger-form select { min-width:0; width:100%; border:1px solid var(--border); border-radius:9px; background:#0c1323; color:var(--text); padding:10px 11px; outline:none; }
@@ -397,7 +404,7 @@ button, input { font: inherit; }
 .ledger-amount.income { color:var(--good); }
 .ledger-amount.expense { color:#ff9a9a; }
 .ledger-status-action { min-width:100px; }
-@media (max-width:900px) { .ledger-form { grid-template-columns:repeat(2,minmax(0,1fr)); } .ledger-description { grid-column:span 2; } .ledger-import-row { grid-template-columns:minmax(0,1fr) 1fr; } }
+@media (max-width:900px) { .ledger-form { grid-template-columns:repeat(2,minmax(0,1fr)); } .ledger-description { grid-column:span 2; } .ledger-import-row { grid-template-columns:minmax(0,1fr) 1fr; } .ledger-reconcile-grid { grid-template-columns:1fr; } }
 @media (max-width:600px) { .ledger-summary { grid-template-columns:1fr; } .ledger-form,.ledger-import-form,.ledger-import-row { grid-template-columns:1fr; } .ledger-description { grid-column:auto; } .ledger-entry { grid-template-columns:1fr auto; } .ledger-status-action { grid-column:span 2; } }
 .worker-status { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:8px; color:#8896ae; font-size:10px; }
 .worker-status > span { width:7px; height:7px; border-radius:50%; background:#657087; }
