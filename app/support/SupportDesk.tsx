@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ListSearch, matchesQuery } from "@/components/ListSearch";
 import { usePolling } from "@/components/usePolling";
 import { AdminTokenField, useAdminToken } from "@/components/AdminToken";
 
@@ -21,6 +22,8 @@ function ageLabel(timestamp: string) {
 
 export function SupportDesk({ authRequired }: { authRequired: boolean }) {
   const [cases, setCases] = useState<SupportCase[]>([]);
+  const [caseQuery, setCaseQuery] = useState("");
+  const filteredCases = cases.filter((item) => matchesQuery(caseQuery, item.title, item.contact_name, item.organization, item.project_name, item.status, item.priority));
   const [loaded, setLoaded] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -93,12 +96,12 @@ export function SupportDesk({ authRequired }: { authRequired: boolean }) {
         <button className="refresh-button" type="submit" disabled={busy || !form.project_id || (authRequired && !token)}>{busy ? "Saving…" : "Create case"}</button>
       </form>
     </section>
-    <section className="support-case-list"><div className="section-title-row"><div><h2>Cases</h2><p>Update status to keep the linked Support task in sync.</p></div><div className="data-source">{cases.length} CASES</div></div>
-      {cases.length ? cases.map((item) => <article className="panel support-case-card" key={item.id}>
+    <section className="support-case-list"><div className="section-title-row"><div><h2>Cases</h2><p>Update status to keep the linked Support task in sync.</p></div><div className="list-head-tools"><ListSearch value={caseQuery} onChange={setCaseQuery} placeholder="Search cases…" /><div className="data-source">{filteredCases.length === cases.length ? `${cases.length} CASES` : `${filteredCases.length} OF ${cases.length} CASES`}</div></div></div>
+      {filteredCases.length ? filteredCases.map((item) => <article className="panel support-case-card" key={item.id}>
         <div className="support-case-heading"><div><span className="sales-project-label">{item.project_name} · {item.priority} · opened {ageLabel(item.created_at)} ago · updated {ageLabel(item.updated_at)} ago</span><h3>{item.title}</h3><p>{item.contact_name ?? "No linked contact"}{item.organization ? ` · ${item.organization}` : ""}</p></div><label className="router-field">Status<select value={item.status} disabled={busy || (authRequired && !token)} onChange={(event) => void updateStatus(item, event.target.value as CaseStatus)}>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div>
         {item.description ? <p className="support-case-description">{item.description}</p> : null}
         <span className="support-task-label">{item.task_id ? `Support task linked · agent run ${item.agent_run_status ?? "not queued"}` : "No active task"}</span>
-      </article>) : loaded ? <div className="panel empty-state">No support cases yet. Create an internal case to start the Support workflow.</div> : <div className="panel empty-state">Loading support cases…</div>}
+      </article>) : cases.length ? <div className="panel empty-state">No support cases match your search.</div> : loaded ? <div className="panel empty-state">No support cases yet. Create an internal case to start the Support workflow.</div> : <div className="panel empty-state">Loading support cases…</div>}
     </section>
   </div>;
 }

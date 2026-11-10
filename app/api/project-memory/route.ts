@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query, transaction } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,7 @@ function denied() {
 
 export async function GET(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   const memories = await query(`SELECT p.id AS project_id,p.name AS project_name,pm.title,pm.content,pm.updated_at::text
     FROM projects p LEFT JOIN project_memories pm ON pm.project_id=p.id ORDER BY p.name`);
   return NextResponse.json({ memories: memories.rows }, { headers: { "Cache-Control": "no-store" } });
@@ -25,7 +26,7 @@ export async function GET(request: Request) {
 
 export async function PUT(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
 
   try {
     const body = await request.json();
@@ -56,6 +57,6 @@ export async function PUT(request: Request) {
     if (!saved) return NextResponse.json({ error: "Project not found." }, { status: 404 });
     return NextResponse.json({ ok: true, project_id: projectId, title, character_count: content.length });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not save project memory." }, { status: 400 });
+    return apiErrorFrom(error, "Could not save project memory.", 400);
   }
 }

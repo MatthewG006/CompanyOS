@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ListSearch, matchesQuery } from "@/components/ListSearch";
 import { AdminTokenField, useAdminToken } from "@/components/AdminToken";
 
 type Project = { id: string; name: string };
@@ -54,6 +55,8 @@ function money(valueCents: string) {
 
 export function SalesPipeline({ projects, authRequired }: { projects: Project[]; authRequired: boolean }) {
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [leadQuery, setLeadQuery] = useState("");
+  const filteredLeads = leads.filter((lead) => matchesQuery(leadQuery, lead.opportunity_title, lead.contact_name, lead.organization, lead.email, lead.project_name, lead.stage));
   const [loaded, setLoaded] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, LeadDraft>>({});
   const { token, setToken } = useAdminToken();
@@ -184,8 +187,8 @@ export function SalesPipeline({ projects, authRequired }: { projects: Project[];
       </form>
     </section>
     {message ? <p className="inline-message" role="status">{message}</p> : null}
-    <section className="sales-lead-list"><div className="section-title-row"><div><h2>Pipeline</h2><p>Update stages and follow-up dates as the relationship progresses.</p></div><div className="data-source">{leads.length} OPPORTUNITIES</div></div>
-      {leads.length ? leads.map((lead) => {
+    <section className="sales-lead-list"><div className="section-title-row"><div><h2>Pipeline</h2><p>Update stages and follow-up dates as the relationship progresses.</p></div><div className="list-head-tools"><ListSearch value={leadQuery} onChange={setLeadQuery} placeholder="Search pipeline…" /><div className="data-source">{filteredLeads.length === leads.length ? `${leads.length} OPPORTUNITIES` : `${filteredLeads.length} OF ${leads.length} OPPORTUNITIES`}</div></div></div>
+      {filteredLeads.length ? filteredLeads.map((lead) => {
         const draft = drafts[lead.id] ?? toDraft(lead);
         return <article className="panel sales-lead-card" key={lead.id}>
           <div className="sales-lead-heading"><div><span className="sales-project-label">{lead.project_name} · {lead.source_attention_item_id ? "GMAIL · OWNER APPROVED" : "OWNER ENTERED"}</span><h3>{lead.opportunity_title}</h3><p>{lead.contact_name ?? "Unknown contact"}{lead.organization ? ` · ${lead.organization}` : ""}{lead.email ? ` · ${lead.email}` : ""}</p></div><strong className="sales-value">{money(lead.estimated_value_cents)}</strong></div>
@@ -199,7 +202,7 @@ export function SalesPipeline({ projects, authRequired }: { projects: Project[];
             <button type="button" className="refresh-button" disabled={busy} onClick={() => void saveLead(lead)}>{busy ? "Saving…" : "Save changes"}</button>
           </div>
         </article>;
-      }) : loaded ? <div className="panel empty-state">No opportunities yet. Add the first lead above.</div> : <div className="panel empty-state">Loading opportunities…</div>}
+      }) : leads.length ? <div className="panel empty-state">No opportunities match your search.</div> : loaded ? <div className="panel empty-state">No opportunities yet. Add the first lead above.</div> : <div className="panel empty-state">Loading opportunities…</div>}
     </section>
   </div>;
 }

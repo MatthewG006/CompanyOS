@@ -1,13 +1,13 @@
 import { DemoBanner } from "@/components/DemoBanner";
 import { StatusDot } from "@/components/StatusDot";
 import { Topbar } from "@/components/Topbar";
-import { getDashboardData } from "@/lib/data";
+import { getProjectsData } from "@/lib/data";
 import { ProjectMemoryEditor } from "./ProjectMemoryEditor";
 
 export const dynamic = "force-dynamic";
 
 export default async function ProjectsPage() {
-  const data = await getDashboardData();
+  const data = await getProjectsData();
   return <div className="page-wrap">
     <DemoBanner source={data.source} />
     <Topbar title="Projects" subtitle="Live project state from the Company Brain." />

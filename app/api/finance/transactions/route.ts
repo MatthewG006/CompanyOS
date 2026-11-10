@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query, transaction } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +17,7 @@ function denied() { return NextResponse.json({ error: "Unauthorized." }, { statu
 
 export async function GET(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   const [transactions, projects, totals] = await Promise.all([
     query(`SELECT t.id,t.project_id,p.name AS project_name,t.source_attention_item_id,t.source_import_row_id,t.transaction_date::text,t.direction,t.amount_cents::text,
       t.category,t.description,t.status,t.created_at::text,t.updated_at::text
@@ -32,7 +33,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   try {
     const body = await request.json();
     const projectId = typeof body?.project_id === "string" && body.project_id ? body.project_id : null;
@@ -66,13 +67,13 @@ export async function POST(request: Request) {
     if (!created) return NextResponse.json({ error: "Project not found." }, { status: 404 });
     return NextResponse.json({ ok: true, transaction_id: created.id });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not record transaction." }, { status: 400 });
+    return apiErrorFrom(error, "Could not record transaction.", 400);
   }
 }
 
 export async function PATCH(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   try {
     const body = await request.json();
     const id = typeof body?.id === "string" ? body.id : "";
@@ -91,6 +92,6 @@ export async function PATCH(request: Request) {
     });
     return changed ? NextResponse.json({ ok: true, id, status }) : NextResponse.json({ error: "Transaction not found." }, { status: 404 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not update transaction." }, { status: 400 });
+    return apiErrorFrom(error, "Could not update transaction.", 400);
   }
 }

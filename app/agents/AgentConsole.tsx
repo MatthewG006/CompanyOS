@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ListSearch, matchesQuery } from "@/components/ListSearch";
 import { usePolling } from "@/components/usePolling";
 import { AdminTokenField, useAdminToken } from "@/components/AdminToken";
 import type { Task } from "@/lib/types";
@@ -48,6 +49,8 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
   const [provider, setProvider] = useState<Provider>("auto");
   const [manualFallback, setManualFallback] = useState<"chatgpt-free" | "claude-free" | "codex">("chatgpt-free");
   const [runs, setRuns] = useState<AgentRun[]>([]);
+  const [runQuery, setRunQuery] = useState("");
+  const filteredRuns = runs.filter((run) => matchesQuery(runQuery, run.task_title, run.agent_name, run.provider, run.status, run.summary, run.error));
   const [runCounts, setRunCounts] = useState<RunCounts>({});
   const [localCap, setLocalCap] = useState<{ limit: number; used: number; capped: boolean } | null>(null);
   const [configured, setConfigured] = useState<Partial<Record<Provider, boolean>>>({});
@@ -446,8 +449,8 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
         {configured.ollama && localCap && localCap.limit > 0 ? <div><span>Local runs (1h)</span><strong>{localCap.used}/{localCap.limit}{localCap.capped ? " · paused" : ""}</strong></div> : null}
       </section>
       {queueMessage ? <p className="inline-message" role="status">{queueMessage}</p> : null}
-      <div className="subsection-title">Recent runs</div>
-      {runs.length ? <div className="run-list">{runs.map((run) => <article className="run-item" key={run.id}>
+      <div className="list-head-tools run-search-row"><div className="subsection-title">Recent runs</div><ListSearch value={runQuery} onChange={setRunQuery} placeholder="Search runs…" /></div>
+      {filteredRuns.length ? <div className="run-list">{filteredRuns.map((run) => <article className="run-item" key={run.id}>
         <div className="run-heading">
           <div>
             <strong>{run.task_title ?? "Deleted task"}</strong>
@@ -479,7 +482,7 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
           </div>
         ) : null}
         {run.result?.text ? <details style={{ marginTop: "0.5rem" }}><summary>View saved response</summary><pre>{run.result.text}</pre></details> : null}
-      </article>)}</div> : <div className="empty-state">No model runs yet. Choose an open task and provider to begin.</div>}
+      </article>)}</div> : runs.length ? <div className="empty-state">No runs match your search.</div> : <div className="empty-state">No model runs yet. Choose an open task and provider to begin.</div>}
     </section>
   </>;
 }

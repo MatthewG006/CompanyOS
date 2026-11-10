@@ -123,6 +123,8 @@ For GitHub, Proxmox, Nextcloud, n8n and Firebase event ingestion, see `docs/inte
 - When an admin token is required, enter it once: it is shared by every panel for the rest of the tab session (kept in `sessionStorage` only) instead of being re-typed per screen.
 - Live panels (Overview, Support, Workflows, AI Workforce) pause their auto-refresh while the tab is hidden and refresh as soon as you return, so the numbers are never stale on sight.
 - The AI Workforce page leads with the task console; agent policies live at the bottom. The task board refreshes itself and says when it is showing the first 8 of more open tasks.
+- The ledger, support cases, sales pipeline, and agent run history each have a search box that filters as you type.
+- Under the hood, each page loads only the data it renders (per-domain loaders in `lib/data.ts`), and API routes share one error helper (`lib/api-errors.ts`) so every error has the same `{ error }` shape.
 
 ## APIs
 

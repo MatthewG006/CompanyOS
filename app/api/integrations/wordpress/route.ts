@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query } from "@/lib/db";
 import { encryptSecret } from "@/lib/secrets";
 import { getWordPressCredentials, checkWordPressHealth } from "@/lib/integrations/wordpress";
@@ -30,13 +31,13 @@ export async function GET(request: Request) {
       message: health.message,
     });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not retrieve WordPress configuration." }, { status: 500 });
+    return apiErrorFrom(error, "Could not retrieve WordPress configuration.", 500);
   }
 }
 
 export async function POST(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
 
   try {
     const body = await request.json();
@@ -71,6 +72,6 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true, message: "WordPress credentials configured successfully." });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not save WordPress credentials." }, { status: 400 });
+    return apiErrorFrom(error, "Could not save WordPress credentials.", 400);
   }
 }

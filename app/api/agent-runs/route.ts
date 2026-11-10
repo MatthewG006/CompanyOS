@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query, transaction } from "@/lib/db";
 import { loadAgentMemory } from "@/lib/ai/memory";
 import { recordAgentProposals } from "@/lib/ai/actions";
@@ -25,7 +26,7 @@ function denied() {
 
 export async function GET(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   const runs = await query(`SELECT r.id,r.task_id,t.title AS task_title,r.provider,r.model,r.status,r.summary,r.input,r.result,r.error,r.created_at::text,r.started_at::text,r.completed_at::text,a.name AS agent_name,
       retry_run.id AS retry_run_id,retry_run.status AS retry_status
     FROM agent_runs r LEFT JOIN tasks t ON t.id=r.task_id LEFT JOIN agents a ON a.id=r.agent_id
@@ -120,7 +121,7 @@ async function queueFailedCodexRetry(runId: string): Promise<RetryOutcome> {
 
 export async function POST(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   try {
     const body = await request.json();
     if (typeof body?.retry_run_id === "string") {
@@ -258,13 +259,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: detail, run_id: runId, status: "failed", attempts }, { status: 502 });
     }
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid agent-run request." }, { status: 400 });
+    return apiErrorFrom(error, "Invalid agent-run request.", 400);
   }
 }
 
 export async function PATCH(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   try {
     const body = await request.json();
     const id = typeof body?.run_id === "string" ? body.run_id : "";
@@ -284,6 +285,6 @@ export async function PATCH(request: Request) {
     if (completion === null) return NextResponse.json({ error: "Manual handoff run not found or already completed." }, { status: 404 });
     return NextResponse.json({ ok: true, run_id: id, status: "completed", approval_proposals: completion });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid manual result." }, { status: 400 });
+    return apiErrorFrom(error, "Invalid manual result.", 400);
   }
 }

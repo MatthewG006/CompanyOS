@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +13,7 @@ function authorized(request: Request) {
 
 export async function PATCH(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   try {
     const body = await request.json().catch(() => ({}));
     const id = typeof body?.id === "string" ? body.id : "";
@@ -22,6 +23,6 @@ export async function PATCH(request: Request) {
     await query(`INSERT INTO events (source,event_type,title,severity,payload) VALUES ('command-center','attention_updated',$1,'info',$2::jsonb)`, [`Attention ${status}`, JSON.stringify({ attention_id: id, status })]);
     return NextResponse.json({ ok: true, id, status });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid request." }, { status: 400 });
+    return apiErrorFrom(error, "Invalid request.", 400);
   }
 }

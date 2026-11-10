@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, transaction } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +13,7 @@ function authorized(request: Request) {
 
 export async function PATCH(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   try {
     const body = await request.json();
     const reminderId = typeof body?.reminder_id === "string" ? body.reminder_id : "";
@@ -37,6 +38,6 @@ export async function PATCH(request: Request) {
     });
     return completed ? NextResponse.json({ ok: true }) : NextResponse.json({ error: "Open reminder not found." }, { status: 404 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not complete reminder." }, { status: 400 });
+    return apiErrorFrom(error, "Could not complete reminder.", 400);
   }
 }

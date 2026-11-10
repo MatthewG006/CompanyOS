@@ -1,12 +1,12 @@
 import { DemoBanner } from "@/components/DemoBanner";
 import { Topbar } from "@/components/Topbar";
-import { getDashboardData } from "@/lib/data";
+import { getProjectsData } from "@/lib/data";
 import { SalesPipeline } from "./SalesPipeline";
 
 export const dynamic = "force-dynamic";
 
 export default async function SalesPage() {
-  const data = await getDashboardData();
+  const data = await getProjectsData();
   return <div className="page-wrap">
     <DemoBanner source={data.source} />
     <Topbar title="Sales Pipeline" subtitle="Track opportunities across Sky Mountain Cloud, Plenty of Plants, and Sky Mountain Graphics." />

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +14,7 @@ function authorized(request: Request) {
 
 export async function GET(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
 
   const result = await query(`SELECT wd.id,wd.workflow_key,wd.status AS workflow_status,wd.created_at::text,
       er.payload->>'category' AS category,ai.priority,p.name AS project_name,a.name AS agent_name,

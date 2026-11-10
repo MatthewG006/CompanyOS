@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query, transaction } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -115,7 +116,7 @@ function parseRows(csv: string) {
 
 export async function GET(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   const [batches, rows] = await Promise.all([
     query(`SELECT b.id,b.file_name,b.status,b.created_at::text,b.completed_at::text,
       COUNT(r.id)::int AS row_count,COUNT(r.id) FILTER (WHERE r.status='pending')::int AS pending_count,
@@ -132,7 +133,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   try {
     const body = await request.json();
     const csv = typeof body?.csv === "string" ? body.csv : "";
@@ -170,13 +171,13 @@ export async function POST(request: Request) {
     if (!batch) return NextResponse.json({ error: "Project not found." }, { status: 404 });
     return NextResponse.json({ ok: true, batch_id: batch.id, row_count: batch.row_count, duplicate_count: batch.duplicate_count });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not stage CSV import." }, { status: 400 });
+    return apiErrorFrom(error, "Could not stage CSV import.", 400);
   }
 }
 
 export async function PUT(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   try {
     const body = await request.json();
     const batchId = typeof body?.batch_id === "string" ? body.batch_id : "";
@@ -210,13 +211,13 @@ export async function PUT(request: Request) {
 
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not reconcile import batch." }, { status: 400 });
+    return apiErrorFrom(error, "Could not reconcile import batch.", 400);
   }
 }
 
 export async function PATCH(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   try {
     const body = await request.json();
     const rowId = typeof body?.row_id === "string" ? body.row_id : "";
@@ -271,7 +272,7 @@ export async function PATCH(request: Request) {
     if ("error" in outcome) return NextResponse.json({ error: outcome.error }, { status: 409 });
     return NextResponse.json({ ok: true, ...outcome });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not review import row." }, { status: 400 });
+    return apiErrorFrom(error, "Could not review import row.", 400);
   }
 }
 

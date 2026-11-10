@@ -1,14 +1,14 @@
 import { DemoBanner } from "@/components/DemoBanner";
 import { StatusDot } from "@/components/StatusDot";
 import { Topbar } from "@/components/Topbar";
-import { getDashboardData } from "@/lib/data";
+import { getAgentsData } from "@/lib/data";
 import { AgentConsole } from "./AgentConsole";
 import { AgentPolicyEditor } from "./AgentPolicyEditor";
 
 export const dynamic = "force-dynamic";
 
 export default async function AgentsPage() {
-  const data = await getDashboardData();
+  const data = await getAgentsData();
   return <div className="page-wrap"><DemoBanner source={data.source} /><Topbar title="AI Workforce" subtitle="Run isolated Codex tasks, use configured model APIs, or hand work to ChatGPT Free and Claude Free. Agents can propose approved follow-up tasks." />
     <div className="agent-console"><AgentConsole tasks={data.tasks} source={data.source} /></div>
     <section className="agent-table">

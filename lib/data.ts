@@ -89,35 +89,36 @@ function sumFinance(rows: Array<{ revenue_cents: string | number; expenses_cents
   return { revenue_cents, expenses_cents, ai_cost_cents, profit_cents: revenue_cents - expenses_cents };
 }
 
-export async function getDashboardData(): Promise<DashboardData> {
-  if (!(await databaseAvailable())) {
-    return {
-      source: "demo",
-      generated_at: new Date().toISOString(),
-      projects: demoProjects,
-      agents: demoAgents,
-      tasks: demoTasks,
-      events: demoEvents,
-      approvals: demoApprovals,
-      system_checks: demoChecks,
-      integrations: demoIntegrations,
-      finance: emptyFinance,
-      external_records: [],
-      external_summary: emptyExternalSummary,
-      sync_runs: [],
-      contacts: demoContacts,
-      meetings: demoMeetings,
-      attention_items: demoAttention,
-    };
-  }
+type Source = "database" | "demo";
 
-  const [projects, agents, tasks, events, approvals, systemChecks, integrations, finance, externalRecords, byProvider, byType, syncRuns, contacts, meetings, attentionItems] = await Promise.all([
-    query<Project>(`SELECT p.id, c.name AS company_name, p.name, p.slug, p.description, p.health, p.stage, p.progress,
+// Database availability is memoized briefly so one request's loaders share
+// a single SELECT 1 probe instead of re-checking per slice.
+let availabilityMemo: { at: number; value: boolean } | null = null;
+
+async function dbSource(): Promise<Source> {
+  const now = Date.now();
+  if (!availabilityMemo || now - availabilityMemo.at > 2000) {
+    availabilityMemo = { at: now, value: await databaseAvailable() };
+  }
+  return availabilityMemo.value ? "database" : "demo";
+}
+
+// Slice loaders: one query (or the demo constant) per dashboard slice.
+// Pages and narrow API routes compose only the slices they render;
+// getDashboardData composes all of them, exactly once each.
+
+async function sliceProjects(): Promise<Project[]> {
+  if ((await dbSource()) === "demo") return demoProjects;
+  return (await query<Project>(`SELECT p.id, c.name AS company_name, p.name, p.slug, p.description, p.health, p.stage, p.progress,
       COUNT(DISTINCT t.id)::int AS task_count,
       COUNT(DISTINCT t.id) FILTER (WHERE t.status NOT IN ('done', 'completed'))::int AS open_task_count
       FROM projects p JOIN companies c ON c.id=p.company_id LEFT JOIN tasks t ON t.project_id=p.id
-      GROUP BY p.id,c.name ORDER BY p.name`),
-    query<Agent>(`SELECT a.id,a.name,a.role,a.department,a.reports_to,manager.name AS manager_name,a.provider,a.status,a.description,a.mission,
+      GROUP BY p.id,c.name ORDER BY p.name`)).rows;
+}
+
+async function sliceAgents(): Promise<Agent[]> {
+  if ((await dbSource()) === "demo") return demoAgents;
+  return (await query<Agent>(`SELECT a.id,a.name,a.role,a.department,a.reports_to,manager.name AS manager_name,a.provider,a.status,a.description,a.mission,
       a.allowed_actions,a.prohibited_actions,a.escalation_rules,a.success_metrics,a.memory_scope,
       COUNT(DISTINCT t.id) FILTER (WHERE t.status NOT IN ('done', 'completed'))::int AS open_task_count,
       COUNT(DISTINCT t.id) FILTER (WHERE t.status IN ('done', 'completed'))::int AS completed_task_count,
@@ -130,62 +131,182 @@ export async function getDashboardData(): Promise<DashboardData> {
       MAX(GREATEST(COALESCE(t.updated_at,t.created_at),COALESCE(r.completed_at,r.started_at,r.created_at)))::text AS last_activity_at
       FROM agents a LEFT JOIN agents manager ON manager.id=a.reports_to
       LEFT JOIN tasks t ON t.agent_id=a.id LEFT JOIN agent_runs r ON r.agent_id=a.id
-      GROUP BY a.id,manager.name ORDER BY a.department,a.name`),
-    query<Task>(`SELECT t.id,p.name AS project_name,p.slug AS project_slug,a.name AS agent_name,t.title,t.priority,t.status,t.due_at::text
+      GROUP BY a.id,manager.name ORDER BY a.department,a.name`)).rows;
+}
+
+async function sliceTasks(): Promise<Task[]> {
+  if ((await dbSource()) === "demo") return demoTasks;
+  return (await query<Task>(`SELECT t.id,p.name AS project_name,p.slug AS project_slug,a.name AS agent_name,t.title,t.priority,t.status,t.due_at::text
       FROM tasks t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN agents a ON a.id=t.agent_id
       WHERE t.status NOT IN ('done', 'completed')
       ORDER BY CASE t.priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
-      COALESCE(t.due_at,'2999-12-31'::timestamptz),t.created_at DESC LIMIT 25`),
-    query<EventItem>(`SELECT e.id,e.source,e.event_type,e.title,e.severity,e.created_at::text,p.name AS project_name
-      FROM events e LEFT JOIN projects p ON p.id=e.project_id ORDER BY e.created_at DESC LIMIT 30`),
-    query<Approval>(`SELECT a.id,p.name AS project_name,a.requested_by,a.action,a.risk_level,a.reason,a.status,a.action_type,a.payload,a.created_at::text
-      FROM approvals a LEFT JOIN projects p ON p.id=a.project_id WHERE a.status='pending' ORDER BY a.created_at DESC LIMIT 25`),
-    query<SystemCheck>(`SELECT sc.id,p.name AS project_name,sc.system_name,sc.status,sc.latency_ms,sc.details,sc.checked_at::text
-      FROM system_checks sc LEFT JOIN projects p ON p.id=sc.project_id ORDER BY sc.checked_at DESC LIMIT 50`),
-    query<IntegrationConnection>(`SELECT id,name,provider,kind,status,mode,last_sync_at::text,last_error,description
-      FROM integration_connections ORDER BY name`),
-    query<{ revenue_cents: string; expenses_cents: string; ai_cost_cents: string }>(`SELECT
+      COALESCE(t.due_at,'2999-12-31'::timestamptz),t.created_at DESC LIMIT 25`)).rows;
+}
+
+async function sliceEvents(): Promise<EventItem[]> {
+  if ((await dbSource()) === "demo") return demoEvents;
+  return (await query<EventItem>(`SELECT e.id,e.source,e.event_type,e.title,e.severity,e.created_at::text,p.name AS project_name
+      FROM events e LEFT JOIN projects p ON p.id=e.project_id ORDER BY e.created_at DESC LIMIT 30`)).rows;
+}
+
+async function sliceApprovals(): Promise<Approval[]> {
+  if ((await dbSource()) === "demo") return demoApprovals;
+  return (await query<Approval>(`SELECT a.id,p.name AS project_name,a.requested_by,a.action,a.risk_level,a.reason,a.status,a.action_type,a.payload,a.created_at::text
+      FROM approvals a LEFT JOIN projects p ON p.id=a.project_id WHERE a.status='pending' ORDER BY a.created_at DESC LIMIT 25`)).rows;
+}
+
+async function sliceIntegrations(): Promise<IntegrationConnection[]> {
+  if ((await dbSource()) === "demo") return demoIntegrations;
+  return (await query<IntegrationConnection>(`SELECT id,name,provider,kind,status,mode,last_sync_at::text,last_error,description
+      FROM integration_connections ORDER BY name`)).rows;
+}
+
+async function sliceFinance(): Promise<FinancialSnapshot> {
+  if ((await dbSource()) === "demo") return emptyFinance;
+  const finance = await query<{ revenue_cents: string; expenses_cents: string; ai_cost_cents: string }>(`SELECT
       (COALESCE((SELECT SUM(revenue_cents) FROM financial_metrics WHERE metric_date >= date_trunc('month',CURRENT_DATE)::date),0)
        + COALESCE((SELECT SUM(amount_cents) FROM financial_transactions WHERE status='recorded' AND direction='income' AND transaction_date >= date_trunc('month',CURRENT_DATE)::date),0))::bigint AS revenue_cents,
       (COALESCE((SELECT SUM(expenses_cents) FROM financial_metrics WHERE metric_date >= date_trunc('month',CURRENT_DATE)::date),0)
        + COALESCE((SELECT SUM(amount_cents) FROM financial_transactions WHERE status='recorded' AND direction='expense' AND transaction_date >= date_trunc('month',CURRENT_DATE)::date),0))::bigint AS expenses_cents,
-      COALESCE((SELECT SUM(ai_cost_cents) FROM financial_metrics WHERE metric_date >= date_trunc('month',CURRENT_DATE)::date),0)::bigint AS ai_cost_cents`),
+      COALESCE((SELECT SUM(ai_cost_cents) FROM financial_metrics WHERE metric_date >= date_trunc('month',CURRENT_DATE)::date),0)::bigint AS ai_cost_cents`);
+  return sumFinance(finance.rows);
+}
+
+async function sliceExternal(): Promise<{ external_records: ExternalRecord[]; external_summary: ExternalSummary }> {
+  if ((await dbSource()) === "demo") return { external_records: [], external_summary: emptyExternalSummary };
+  const [externalRecords, byProvider, byType] = await Promise.all([
     query<ExternalRecord>(`SELECT id,provider,record_type,external_id,title,url,status,owner,occurred_at::text,last_seen_at::text
       FROM external_records ORDER BY COALESCE(occurred_at,last_seen_at) DESC LIMIT 40`),
     query<{ provider: string; count: string }>(`SELECT provider,COUNT(*)::text AS count FROM external_records GROUP BY provider ORDER BY COUNT(*) DESC`),
     query<{ record_type: string; count: string }>(`SELECT record_type,COUNT(*)::text AS count FROM external_records GROUP BY record_type ORDER BY COUNT(*) DESC`),
-    query<SyncRun>(`SELECT id,integration_name,status,records_seen,records_written,error,started_at::text,completed_at::text
-      FROM sync_runs ORDER BY started_at DESC LIMIT 12`),
-    query<Contact>(`SELECT c.id,c.name,c.email,c.organization,c.source,c.status,c.last_contact_at::text,p.name AS project_name
-      FROM contacts c LEFT JOIN projects p ON p.id=c.project_id ORDER BY COALESCE(c.last_contact_at,c.created_at) DESC LIMIT 30`),
-    query<Meeting>(`SELECT m.id,m.provider,m.external_id,m.title,m.url,m.status,m.organizer,m.start_at::text,m.end_at::text,m.location,p.name AS project_name
-      FROM meetings m LEFT JOIN projects p ON p.id=m.project_id WHERE m.start_at IS NOT NULL
-      ORDER BY m.start_at ASC LIMIT 30`),
-    query<AttentionItem>(`SELECT ai.id,ai.source,ai.attention_type,ai.priority,ai.title,ai.description,ai.status,ai.due_at::text,p.name AS project_name,c.name AS contact_name
-      FROM attention_items ai LEFT JOIN projects p ON p.id=ai.project_id LEFT JOIN contacts c ON c.id=ai.contact_id
-      WHERE ai.status='open' ORDER BY CASE ai.priority WHEN 'high' THEN 1 ELSE 2 END,COALESCE(ai.due_at,'2999-12-31'::timestamptz),ai.created_at DESC LIMIT 30`),
   ]);
-
+  const total = externalRecords.rows.length > 0 ? Number((await query<{ count: string }>("SELECT COUNT(*)::text AS count FROM external_records")).rows[0]?.count ?? 0) : 0;
   return {
-    source: "database",
-    generated_at: new Date().toISOString(),
-    projects: projects.rows,
-    agents: agents.rows,
-    tasks: tasks.rows,
-    events: events.rows,
-    approvals: approvals.rows,
-    system_checks: systemChecks.rows,
-    integrations: integrations.rows,
-    finance: sumFinance(finance.rows),
     external_records: externalRecords.rows,
     external_summary: {
-      total: externalRecords.rows.length > 0 ? Number((await query<{ count: string }>("SELECT COUNT(*)::text AS count FROM external_records")).rows[0]?.count ?? 0) : 0,
+      total,
       by_provider: byProvider.rows.map((row) => ({ provider: row.provider, count: Number(row.count) })),
       by_type: byType.rows.map((row) => ({ record_type: row.record_type, count: Number(row.count) })),
     },
-    sync_runs: syncRuns.rows,
-    contacts: contacts.rows,
-    meetings: meetings.rows,
-    attention_items: attentionItems.rows,
+  };
+}
+
+async function sliceSystemChecks(): Promise<SystemCheck[]> {
+  if ((await dbSource()) === "demo") return demoChecks;
+  return (await query<SystemCheck>(`SELECT sc.id,p.name AS project_name,sc.system_name,sc.status,sc.latency_ms,sc.details,sc.checked_at::text
+      FROM system_checks sc LEFT JOIN projects p ON p.id=sc.project_id ORDER BY sc.checked_at DESC LIMIT 50`)).rows;
+}
+
+async function sliceSyncRuns(): Promise<SyncRun[]> {
+  if ((await dbSource()) === "demo") return [];
+  return (await query<SyncRun>(`SELECT id,integration_name,status,records_seen,records_written,error,started_at::text,completed_at::text
+      FROM sync_runs ORDER BY started_at DESC LIMIT 12`)).rows;
+}
+
+async function sliceContacts(): Promise<Contact[]> {
+  if ((await dbSource()) === "demo") return demoContacts;
+  return (await query<Contact>(`SELECT c.id,c.name,c.email,c.organization,c.source,c.status,c.last_contact_at::text,p.name AS project_name
+      FROM contacts c LEFT JOIN projects p ON p.id=c.project_id ORDER BY COALESCE(c.last_contact_at,c.created_at) DESC LIMIT 30`)).rows;
+}
+
+async function sliceMeetings(): Promise<Meeting[]> {
+  if ((await dbSource()) === "demo") return demoMeetings;
+  return (await query<Meeting>(`SELECT m.id,m.provider,m.external_id,m.title,m.url,m.status,m.organizer,m.start_at::text,m.end_at::text,m.location,p.name AS project_name
+      FROM meetings m LEFT JOIN projects p ON p.id=m.project_id WHERE m.start_at IS NOT NULL
+      ORDER BY m.start_at ASC LIMIT 30`)).rows;
+}
+
+async function sliceAttention(): Promise<AttentionItem[]> {
+  if ((await dbSource()) === "demo") return demoAttention;
+  return (await query<AttentionItem>(`SELECT ai.id,ai.source,ai.attention_type,ai.priority,ai.title,ai.description,ai.status,ai.due_at::text,p.name AS project_name,c.name AS contact_name
+      FROM attention_items ai LEFT JOIN projects p ON p.id=ai.project_id LEFT JOIN contacts c ON c.id=ai.contact_id
+      WHERE ai.status='open' ORDER BY CASE ai.priority WHEN 'high' THEN 1 ELSE 2 END,COALESCE(ai.due_at,'2999-12-31'::timestamptz),ai.created_at DESC LIMIT 30`)).rows;
+}
+
+async function sourceOf<T extends object>(slices: T): Promise<T & { source: Source }> {
+  return { source: await dbSource(), ...slices };
+}
+
+// Per-domain loaders for pages and narrow routes.
+
+export async function getProjectsData() {
+  return sourceOf({ projects: await sliceProjects() });
+}
+
+export async function getAgentsData() {
+  const [agents, tasks] = await Promise.all([sliceAgents(), sliceTasks()]);
+  return sourceOf({ agents, tasks });
+}
+
+export async function getTasksData() {
+  return sourceOf({ tasks: await sliceTasks() });
+}
+
+export async function getEventsData() {
+  return sourceOf({ events: await sliceEvents() });
+}
+
+export async function getApprovalsData() {
+  return sourceOf({ approvals: await sliceApprovals() });
+}
+
+export async function getIntegrationsData() {
+  return sourceOf({ integrations: await sliceIntegrations() });
+}
+
+export async function getFinanceData() {
+  return sourceOf({ finance: await sliceFinance() });
+}
+
+export async function getCommunicationsData() {
+  const [events, integrations, external] = await Promise.all([sliceEvents(), sliceIntegrations(), sliceExternal()]);
+  return sourceOf({ events, integrations, external_records: external.external_records });
+}
+
+export async function getOperationsData() {
+  const [system_checks, integrations, sync_runs, external] = await Promise.all([sliceSystemChecks(), sliceIntegrations(), sliceSyncRuns(), sliceExternal()]);
+  return sourceOf({ system_checks, integrations, sync_runs, external_summary: external.external_summary });
+}
+
+export async function getIntelligenceData() {
+  const [contacts, meetings, attention_items] = await Promise.all([sliceContacts(), sliceMeetings(), sliceAttention()]);
+  return sourceOf({ contacts, meetings, attention_items });
+}
+
+/** The full dashboard. Only the Overview, /api/overview and the command
+ *  router need every slice; everything else uses a per-domain loader. */
+export async function getDashboardData(): Promise<DashboardData> {
+  const [projects, agents, tasks, events, approvals, system_checks, integrations, finance, external, sync_runs, contacts, meetings, attention_items] = await Promise.all([
+    sliceProjects(),
+    sliceAgents(),
+    sliceTasks(),
+    sliceEvents(),
+    sliceApprovals(),
+    sliceSystemChecks(),
+    sliceIntegrations(),
+    sliceFinance(),
+    sliceExternal(),
+    sliceSyncRuns(),
+    sliceContacts(),
+    sliceMeetings(),
+    sliceAttention(),
+  ]);
+  return {
+    source: await dbSource(),
+    generated_at: new Date().toISOString(),
+    projects,
+    agents,
+    tasks,
+    events,
+    approvals,
+    system_checks,
+    integrations,
+    finance,
+    external_records: external.external_records,
+    external_summary: external.external_summary,
+    sync_runs,
+    contacts,
+    meetings,
+    attention_items,
   };
 }

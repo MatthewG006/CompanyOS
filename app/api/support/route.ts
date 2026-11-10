@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query, transaction } from "@/lib/db";
 import { loadAgentMemory } from "@/lib/ai/memory";
 import { buildTaskPrompt } from "@/lib/ai/router";
@@ -20,7 +21,7 @@ function denied() { return NextResponse.json({ error: "Unauthorized." }, { statu
 
 export async function GET(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   const [cases, projects, contacts] = await Promise.all([
     query(`SELECT c.id,c.project_id,p.name AS project_name,c.contact_id,co.name AS contact_name,co.organization,
       c.task_id,c.title,c.description,c.priority,c.status,c.created_at::text,c.updated_at::text,c.resolved_at::text,
@@ -36,7 +37,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   try {
     const body = await request.json();
     const projectId = typeof body?.project_id === "string" ? body.project_id : "";
@@ -144,13 +145,13 @@ export async function POST(request: Request) {
     if ("error" in created) return NextResponse.json({ error: created.error }, { status: 404 });
     return NextResponse.json({ ok: true, ...created });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not create support case." }, { status: 400 });
+    return apiErrorFrom(error, "Could not create support case.", 400);
   }
 }
 
 export async function PATCH(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   try {
     const body = await request.json();
     const id = typeof body?.id === "string" ? body.id : "";
@@ -174,6 +175,6 @@ export async function PATCH(request: Request) {
     });
     return updated ? NextResponse.json({ ok: true, id, status }) : NextResponse.json({ error: "Support case not found." }, { status: 404 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not update support case." }, { status: 400 });
+    return apiErrorFrom(error, "Could not update support case.", 400);
   }
 }
