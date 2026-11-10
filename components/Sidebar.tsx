@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 const links = [
   ["Overview", "/"],
@@ -15,9 +18,14 @@ const links = [
 ] as const;
 
 export function Sidebar({ ownerAuthEnabled = false }: { ownerAuthEnabled?: boolean }) {
+  const pathname = usePathname();
+  const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`));
   return <aside className="sidebar">
-    <div className="brand-block"><div className="brand-mark">SM</div><div><div className="brand-name">Sky Mountain</div><div className="brand-sub">CompanyOS</div></div></div>
-    <nav>{links.map(([label, href]) => <Link key={href} href={href} className="nav-link">{label}</Link>)}</nav>
+    <Link href="/" className="brand-block brand-link" aria-label="Sky Mountain CompanyOS — go to Overview"><div className="brand-mark">SM</div><div><div className="brand-name">Sky Mountain</div><div className="brand-sub">CompanyOS</div></div></Link>
+    <nav>{links.map(([label, href]) => {
+      const active = isActive(href);
+      return <Link key={href} href={href} className={active ? "nav-link active" : "nav-link"} aria-current={active ? "page" : undefined}>{label}</Link>;
+    })}</nav>
     <div className="sidebar-footer"><div className="system-state"><span className="status-dot good" /> Command Center online</div><div className="system-note">Business automation · v0.6</div>{ownerAuthEnabled ? <form action="/api/auth/logout" method="post"><button className="signout-button" type="submit">Sign out</button></form> : null}</div>
   </aside>;
 }

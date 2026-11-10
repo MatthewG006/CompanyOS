@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePolling } from "./usePolling";
 import type { DashboardData } from "@/lib/types";
 import { ApprovalList } from "./ApprovalList";
-import { CommandBar } from "./CommandBar";
 import { DemoBanner } from "./DemoBanner";
 import { MetricCard } from "./MetricCard";
 import { ProjectCard } from "./ProjectCard";
@@ -55,10 +55,7 @@ export function LiveOverview({ initial }: { initial: DashboardData }) {
     }
   }, []);
 
-  useEffect(() => {
-    const timer = window.setInterval(refresh, 30_000);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+  usePolling(refresh, 30_000);
 
   return <div className="page-wrap">
     <DemoBanner source={data.source} />
@@ -74,7 +71,6 @@ export function LiveOverview({ initial }: { initial: DashboardData }) {
       </div>
     </header>
 
-    <CommandBar onCommandComplete={refresh} />
 
     <div className="refresh-meta">Database source: <strong>{data.source}</strong> · Last refresh {formatTime(lastRefresh)} · Auto-refresh every 30 seconds</div>
 

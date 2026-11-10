@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AdminTokenProvider } from "@/components/AdminToken";
+import { GlobalCommandBar } from "@/components/GlobalCommandBar";
 import { Sidebar } from "@/components/Sidebar";
 
 export const metadata: Metadata = {
@@ -11,10 +13,15 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en">
       <body>
-        <div className="app-shell">
-          <Sidebar ownerAuthEnabled={process.env.NODE_ENV === "production"} />
-          <main className="main-area">{children}</main>
-        </div>
+        <AdminTokenProvider>
+          <div className="app-shell">
+            <Sidebar ownerAuthEnabled={process.env.NODE_ENV === "production"} />
+            <main className="main-area">
+              <GlobalCommandBar />
+              {children}
+            </main>
+          </div>
+        </AdminTokenProvider>
       </body>
     </html>
   );

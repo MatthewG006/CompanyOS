@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { usePolling } from "@/components/usePolling";
+import { AdminTokenField, useAdminToken } from "@/components/AdminToken";
 import type { Task } from "@/lib/types";
 
 type Provider = "auto" | "openai" | "anthropic" | "ollama" | "chatgpt-free" | "claude-free" | "codex" | "codex-cli";
@@ -52,7 +54,7 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
   const [codexStatus, setCodexStatus] = useState<ProviderStatus | null>(null);
   const [workerStatus, setWorkerStatus] = useState<AgentWorkerStatus | null>(null);
   const [authRequired, setAuthRequired] = useState(false);
-  const [adminToken, setAdminToken] = useState("");
+  const { token: adminToken, setToken: setAdminToken } = useAdminToken();
   const [prompt, setPrompt] = useState("");
   const [activeRunId, setActiveRunId] = useState("");
   const [activeProvider, setActiveProvider] = useState<Provider>("chatgpt-free");
@@ -66,6 +68,19 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
     "Content-Type": "application/json",
     ...(adminToken ? { Authorization: `Bearer ${adminToken}` } : {}),
   }), [adminToken]);
+
+  const [boardTasks, setBoardTasks] = useState<Task[]>(tasks);
+
+  const refreshTasks = useCallback(async () => {
+    try {
+      const response = await fetch("/api/tasks", { cache: "no-store" });
+      if (!response.ok) return;
+      const body = await response.json();
+      if (Array.isArray(body.tasks)) setBoardTasks(body.tasks as Task[]);
+    } catch {
+      // Keep the last known list; the next refresh retries.
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     const response = await fetch("/api/agent-runs", { headers: requestHeaders(), cache: "no-store" });
@@ -82,18 +97,14 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
     setWorkerStatus(body.agent_worker ?? null);
     setRuns(body.runs ?? []);
     setRunCounts(body.run_counts ?? {});
-  }, [requestHeaders]);
+    await refreshTasks();
+  }, [requestHeaders, refreshTasks]);
 
   useEffect(() => {
     void refresh().catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Could not load agent runs."));
   }, [refresh]);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      void refresh().catch(() => undefined);
-    }, 8000);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+  usePolling(refresh, 8000);
 
   async function runNextQueued() {
     setBusy(true);
@@ -290,17 +301,17 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
   }
 
   return <>
-    {tasks.length > 0 ? (
+    {boardTasks.length > 0 ? (
       <section className="panel task-board-panel" style={{ marginBottom: "1.5rem" }}>
         <div className="panel-head">
           <div>
             <h2>Open tasks & AI dispatch</h2>
             <p className="muted">Directly dispatch any open project task to its assigned AI agent or provider.</p>
           </div>
-          <span className="data-source">{tasks.length} OPEN TASKS</span>
+          <span className="data-source">{boardTasks.length > 8 ? `SHOWING 8 OF ${boardTasks.length} OPEN TASKS` : `${boardTasks.length} OPEN TASKS`}</span>
         </div>
         <div className="list-stack">
-          {tasks.slice(0, 8).map((task) => (
+          {boardTasks.slice(0, 8).map((task) => (
             <div className="list-item" key={task.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div style={{ flex: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
@@ -344,10 +355,10 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
         </div>
         <span className="data-source">{source === "database" ? "POSTGRESQL" : "DEMO MODE"}</span>
       </div>
-      {authRequired ? <label className="router-field">Admin token<input type="password" autoComplete="current-password" value={adminToken} onChange={(event) => setAdminToken(event.target.value)} placeholder="Required by COMPANYOS_ADMIN_TOKEN" /></label> : null}
+      {authRequired ? <AdminTokenField /> : null}
       <form className="router-form" onSubmit={startRun}>
-        <label className="router-field">Open task<select value={taskId} onChange={(event) => setTaskId(event.target.value)} disabled={source !== "database" || tasks.length === 0}>
-          {tasks.map((task) => <option key={task.id} value={task.id}>{task.title}{task.project_name ? ` · ${task.project_name}` : ""}{task.agent_name ? ` (${task.agent_name})` : ""}</option>)}
+        <label className="router-field">Open task<select value={taskId} onChange={(event) => setTaskId(event.target.value)} disabled={source !== "database" || boardTasks.length === 0}>
+          {boardTasks.map((task) => <option key={task.id} value={task.id}>{task.title}{task.project_name ? ` · ${task.project_name}` : ""}{task.agent_name ? ` (${task.agent_name})` : ""}</option>)}
         </select></label>
         <label className="router-field">Execution provider<select value={provider} onChange={(event) => setProvider(event.target.value as Provider)}>
           {(Object.keys(providerLabels) as Provider[]).map((key) => <option key={key} value={key} disabled={configured[key] === false}>{providerLabels[key]}{["openai", "anthropic", "ollama"].includes(key) && configured[key] === false ? " · configure server" : key === "codex-cli" && configured[key] === false ? " · sign in required" : ""}</option>)}
@@ -362,7 +373,7 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
             </select>
           </label>
         ) : null}
-        <button type="submit" className="refresh-button router-submit" disabled={busy || source !== "database" || !tasks.length}>{busy ? "Working…" : "Dispatch task"}</button>
+        <button type="submit" className="refresh-button router-submit" disabled={busy || source !== "database" || !boardTasks.length}>{busy ? "Working…" : "Dispatch task"}</button>
       </form>
       {provider === "codex-cli" && codexStatus && !codexStatus.authenticated ? <p className="inline-message" role="status">{codexStatus.message}</p> : null}
       {source !== "database" ? <p className="inline-message">Connect PostgreSQL to run and save tasks.</p> : null}

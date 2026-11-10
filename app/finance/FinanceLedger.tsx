@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { AdminTokenField, useAdminToken } from "@/components/AdminToken";
 
 type Project = { id: string; name: string };
 type Totals = { income_cents: string; expense_cents: string };
@@ -20,7 +21,7 @@ export function FinanceLedger({ authRequired }: { authRequired: boolean }) {
   const [importProjectId, setImportProjectId] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
   const [totals, setTotals] = useState<Totals>({ income_cents: "0", expense_cents: "0" });
-  const [token, setToken] = useState("");
+  const { token, setToken } = useAdminToken();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [form, setForm] = useState({ project_id: "", transaction_date: "", direction: "income", amount: "", category: "sales", description: "" });
@@ -111,7 +112,7 @@ export function FinanceLedger({ authRequired }: { authRequired: boolean }) {
   }
 
   return <div className="ledger-workspace">
-    {authRequired ? <label className="router-field policy-token">Admin token<input type="password" autoComplete="current-password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Required by COMPANYOS_ADMIN_TOKEN" /></label> : null}
+    {authRequired ? <AdminTokenField className="policy-token" /> : null}
     <p className="onboarding-boundary">Owner-entered USD records only. This ledger does not connect to banks or payment providers and does not initiate payments. Voiding preserves the audit trail.</p>
     {message ? <p className="inline-message" role="status">{message}</p> : null}
     <div className="ledger-summary"><div><span>All-time ledger income</span><strong>{money(totals.income_cents)}</strong></div><div><span>All-time ledger expenses</span><strong>{money(totals.expense_cents)}</strong></div></div>
