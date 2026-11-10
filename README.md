@@ -175,15 +175,17 @@ After connecting Google, open `/communications` and use **Sync configured**. Gma
 
 ## Continuous integration
 
-GitHub Actions runs the `CI` workflow (`.github/workflows/ci.yml`) on every pull request and on every push to `main`. The single verify job installs dependencies with `npm ci` on Node.js 24, then runs the same commands used locally:
+GitHub Actions runs the `CI` workflow (`.github/workflows/ci.yml`) on every pull request and on every push to `main`. The single verify job installs dependencies with `npm ci` on Node.js 24 against a `postgres:16` service container, then runs the same commands used locally:
 
-```powershell
+```bash
 npm run lint
 npm run typecheck
+npm run db:migrate
 npm test
+npm run test:routes
 ```
 
-`npm run typecheck` runs `tsc --noEmit`. The database integration tests skip automatically when `DATABASE_URL` is not set, in CI just as they do locally, so the workflow needs no secrets or services.
+`npm run typecheck` runs `tsc --noEmit`. The workflow sets `DATABASE_URL` to the service container and migrates it before testing, so the database unit tests run for real in CI and the route-integration suite (`test:routes`, which builds the app and exercises the API routes against a throwaway database) is exercised on every change. Locally, the database tests skip automatically when `DATABASE_URL` is not set.
 
 
 ## v0.4 Intelligence layer
