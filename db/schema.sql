@@ -526,6 +526,28 @@ CREATE TABLE IF NOT EXISTS brand_kits (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Content planner + design studio items (Lead Desk model): agents propose
+-- content through approvals, the owner approves and schedules the week, and
+-- approved items publish to the business's Instagram via its brand kit.
+CREATE TABLE IF NOT EXISTS content_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  type TEXT NOT NULL DEFAULT 'post' CHECK (type IN ('post','reel','story','article')),
+  title TEXT NOT NULL,
+  caption TEXT NOT NULL DEFAULT '',
+  image_prompt TEXT NOT NULL DEFAULT '',
+  image_url TEXT NOT NULL DEFAULT '',
+  image_options JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','in_review','approved','scheduled','published')),
+  scheduled_for DATE,
+  published_url TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL DEFAULT 'owner',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_content_items_project_week ON content_items(project_id, scheduled_for);
+
 -- Existing synced attention is baseline data. Do not create a backlog of agent work on upgrade.
 INSERT INTO workflow_dispatches (workflow_key, attention_item_id, project_id, status)
 SELECT 'gmail_attention_to_agent_task_v1', ai.id, ai.project_id, 'existing_at_enablement'

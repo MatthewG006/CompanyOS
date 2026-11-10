@@ -17,7 +17,21 @@ type AgentActionRequest = {
   subject?: string;
   body?: string;
   content?: string;
+  contentType?: string;
+  caption?: string;
+  imagePrompt?: string;
+  scheduledFor?: string;
 };
+
+const CONTENT_TYPES = new Set(["post", "reel", "story", "article"]);
+
+function boundedDate(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const match = value.trim().match(/^\d{4}-\d{2}-\d{2}/);
+  if (!match) return "";
+  const parsed = new Date(`${match[0]}T12:00:00Z`);
+  return Number.isNaN(parsed.getTime()) ? "" : match[0];
+}
 
 type AgentTool = {
   actionType: string;
@@ -388,7 +402,47 @@ const publishWordPressPostTool: AgentTool = {
   },
 };
 
+const createContentItemTool: AgentTool = {
+  actionType: "create_content_item",
+  permission: "request_content_item",
+  parseProposal(value) {
+    const reason = boundedText(value.reason, 500);
+    const title = boundedText(value.title, 160);
+    const contentType = typeof value.content_type === "string" && CONTENT_TYPES.has(value.content_type) ? value.content_type : "";
+    const caption = boundedText(value.caption, 2200);
+    const imagePrompt = boundedText(value.image_prompt, 500);
+    const scheduledFor = boundedDate(value.scheduled_for);
+    return value.type === "create_content_item" && title.length >= 3 && contentType && reason.length >= 8
+      ? { reason, title, contentType, caption, imagePrompt, scheduledFor }
+      : null;
+  },
+  approvalPayload(value) {
+    return { title: value.title, content_type: value.contentType, caption: value.caption ?? "", image_prompt: value.imagePrompt ?? "", scheduled_for: value.scheduledFor ?? "" };
+  },
+  approvalLabel(value) { return `Add to content planner (${value.contentType}): ${value.title}`; },
+  async execute(client, projectId, agentId, rawPayload, runId) {
+    const payload = rawPayload && typeof rawPayload === "object" ? rawPayload as Record<string, unknown> : {};
+    const title = boundedText(payload.title, 160);
+    const contentType = typeof payload.content_type === "string" && CONTENT_TYPES.has(payload.content_type) ? payload.content_type : "";
+    if (title.length < 3 || !contentType || !projectId) throw new Error("The approved content proposal is invalid.");
+    const agent = agentId ? await client.query<{ name: string }>("SELECT name FROM agents WHERE id=$1", [agentId]) : null;
+    const result = await client.query<{ id: string }>(
+      `INSERT INTO content_items (project_id,type,title,caption,image_prompt,status,scheduled_for,created_by)
+       VALUES ($1,$2,$3,$4,$5,'in_review',$6,$7) RETURNING id`,
+      [projectId, contentType, title, boundedText(payload.caption, 2200), boundedText(payload.image_prompt, 500),
+        boundedDate(payload.scheduled_for) || null, agent?.rows[0]?.name ?? "agent"],
+    );
+    await client.query(
+      `INSERT INTO events (source,event_type,title,severity,project_id,payload)
+       VALUES ('content-planner','content_item_created','Owner-approved content added to the planner','info',$1,$2::jsonb)`,
+      [projectId, JSON.stringify({ content_item_id: result.rows[0].id, agent_run_id: runId, agent_id: agentId, type: contentType, title })],
+    );
+    return result.rows[0].id;
+  },
+};
+
 const registry = new Map<string, AgentTool>([
+  [createContentItemTool.actionType, createContentItemTool],
   [createTaskTool.actionType, createTaskTool],
   [updateTaskStatusTool.actionType, updateTaskStatusTool],
   [updateSupportCaseTool.actionType, updateSupportCaseTool],

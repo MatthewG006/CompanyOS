@@ -5,6 +5,7 @@ import type {
   AttentionItem,
   BrandKit,
   Contact,
+  ContentItem,
   DashboardData,
   EventItem,
   ExternalRecord,
@@ -32,7 +33,7 @@ export const demoAgents: Agent[] = [
   { id: "a5", name: "QA", role: "Quality & Security", department: "Engineering", manager_name: "CTO", reports_to: "a3", provider: "agnostic", status: "idle", description: "Testing, regression and security review.", open_task_count: 0 },
   { id: "a6", name: "DevOps", role: "Site Reliability", department: "Infrastructure", manager_name: "CTO", reports_to: "a3", provider: "agnostic", status: "working", description: "Monitoring, deployments, backups and incidents.", open_task_count: 1 },
   { id: "a7", name: "Sales", role: "Sales Manager", department: "Sales", manager_name: "COO", reports_to: "a2", provider: "agnostic", status: "idle", description: "Prospecting, qualification and follow-up.", allowed_actions: ["request_task_creation", "request_task_status_change", "request_sales_lead"], open_task_count: 1 },
-  { id: "a8", name: "Marketing", role: "Marketing Manager", department: "Marketing", manager_name: "COO", reports_to: "a2", provider: "agnostic", status: "idle", description: "Campaigns, content, partnerships and analytics.", open_task_count: 0 },
+  { id: "a8", name: "Marketing", role: "Marketing Manager", department: "Marketing", manager_name: "COO", reports_to: "a2", provider: "agnostic", status: "idle", description: "Campaigns, content, partnerships and analytics.", allowed_actions: ["request_task_creation", "request_task_status_change", "request_content_item"], open_task_count: 0 },
   { id: "a9", name: "Support", role: "Customer Success", department: "Customer", manager_name: "COO", reports_to: "a2", provider: "agnostic", status: "idle", description: "Customer communication, onboarding and issue routing.", open_task_count: 0 },
   { id: "a10", name: "Finance", role: "Finance & Operations", department: "Finance", manager_name: "CEO", reports_to: "a1", provider: "agnostic", status: "idle", description: "Revenue, expenses, AI budget and operating metrics.", allowed_actions: ["request_task_creation", "request_task_status_change", "request_financial_entry"], open_task_count: 0 },
   { id: "a11", name: "Research", role: "Research Analyst", department: "Intelligence", manager_name: "CEO", reports_to: "a1", provider: "agnostic", status: "idle", description: "Market, competitor and product research.", open_task_count: 1 },
@@ -75,6 +76,21 @@ export const demoBrandKits: BrandKit[] = [
   { project_id: "demo-1", project_name: "Sky Mountain Cloud", website_url: "https://skymountaincloud.com", logo_url: "", colors: ["#1e3a5f", "#38bdf8", "#f8fafc"], fonts: ["Inter"], phone: "", service_area: "", services: ["Nextcloud hosting", "Account provisioning", "Onboarding and support"], instagram_username: "skymountaincloud", tagline: "Sky Mountain Cloud", source: "demo" },
   { project_id: "demo-2", project_name: "Plenty of Plants", website_url: "", logo_url: "", colors: ["#166534", "#86efac", "#fefce8"], fonts: ["Inter"], phone: "", service_area: "", services: ["Plant care game", "Nursery partnerships"], instagram_username: "", tagline: "Plenty of Plants", source: "demo" },
   { project_id: "demo-3", project_name: "Sky Mountain Graphics", website_url: "", logo_url: "", colors: ["#7c2d12", "#f59e0b", "#fff7ed"], fonts: ["Montserrat"], phone: "", service_area: "", services: ["Graphic design", "Web design", "Branding"], instagram_username: "skymountaingraphics", tagline: "Sky Mountain Graphics", source: "demo" },
+];
+
+function demoWeekDate(offsetDays: number): string {
+  const now = new Date();
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7) + offsetDays);
+  return monday.toISOString().slice(0, 10);
+}
+
+export const demoContentItems: ContentItem[] = [
+  { id: "ci-1", project_id: "demo-1", project_name: "Sky Mountain Cloud", type: "post", title: "Your files deserve a real cloud", caption: "Backups that just work — your photos, docs and projects, safe in your own cloud. ☁️", image_prompt: "Cozy home office, laptop with a cloud dashboard, warm light", image_url: "", image_options: [], status: "in_review", scheduled_for: demoWeekDate(0), published_url: "", created_by: "Marketing" },
+  { id: "ci-2", project_id: "demo-1", project_name: "Sky Mountain Cloud", type: "story", title: "Behind the scenes: the home lab", caption: "Where your cloud actually lives.", image_prompt: "Server rack with soft blue lights, tidy cables", image_url: "", image_options: [], status: "draft", scheduled_for: demoWeekDate(3), published_url: "", created_by: "Marketing" },
+  { id: "ci-3", project_id: "demo-2", project_name: "Plenty of Plants", type: "reel", title: "Watering day timelapse", caption: "Sixty plants, one watering day. 🌱", image_prompt: "Sunlit plant shelf, watering can mid-pour, green everywhere", image_url: "", image_options: [], status: "approved", scheduled_for: demoWeekDate(2), published_url: "", created_by: "Marketing" },
+  { id: "ci-4", project_id: "demo-2", project_name: "Plenty of Plants", type: "post", title: "Meet the cast: the fern that survives everything", caption: "Some plants are just built different.", image_prompt: "Close-up of a lush fern in a terracotta pot by a window", image_url: "", image_options: [], status: "draft", scheduled_for: null, published_url: "", created_by: "owner" },
+  { id: "ci-5", project_id: "demo-3", project_name: "Sky Mountain Graphics", type: "post", title: "Before / after: a logo refresh", caption: "Same business, sharper first impression.", image_prompt: "Split design desk scene: rough sketches on the left, polished logo on the right", image_url: "", image_options: [], status: "scheduled", scheduled_for: demoWeekDate(4), published_url: "", created_by: "Marketing" },
+  { id: "ci-6", project_id: "demo-3", project_name: "Sky Mountain Graphics", type: "article", title: "What a small-business website must do in 2026", caption: "Draft for the WordPress blog.", image_prompt: "", image_url: "", image_options: [], status: "in_review", scheduled_for: demoWeekDate(5), published_url: "", created_by: "Marketing" },
 ];
 
 const demoContacts: Contact[] = [
@@ -258,6 +274,15 @@ async function sliceBrandKits(): Promise<BrandKit[]> {
   }));
 }
 
+async function sliceContentItems(): Promise<ContentItem[]> {
+  if ((await dbSource()) === "demo") return demoContentItems;
+  const rows = (await query<ContentItem & { image_options: unknown }>(`SELECT ci.id,ci.project_id,p.name AS project_name,ci.type,ci.title,ci.caption,ci.image_prompt,ci.image_url,
+      ci.image_options,ci.status,ci.scheduled_for::text,ci.published_url,ci.created_by,ci.created_at::text,ci.updated_at::text
+      FROM content_items ci JOIN projects p ON p.id=ci.project_id
+      ORDER BY ci.scheduled_for NULLS LAST, ci.created_at DESC LIMIT 160`)).rows;
+  return rows.map((row) => ({ ...row, image_options: asStringArray(row.image_options) }));
+}
+
 async function sourceOf<T extends object>(slices: T): Promise<T & { source: Source }> {
   return { source: await dbSource(), ...slices };
 }
@@ -317,6 +342,13 @@ export async function getBrandKitsData() {
 export async function getAgencyData() {
   const [projects, agents, tasks, approvals, brand_kits] = await Promise.all([sliceProjects(), sliceAgents(), sliceTasks(), sliceApprovals(), sliceBrandKits()]);
   return sourceOf({ projects, agents, tasks, approvals, brand_kits });
+}
+
+/** The content planner + design studio (Lead Desk Phase 2): content items
+ *  for the week grid, with each business's brand kit for publishing context. */
+export async function getContentData() {
+  const [projects, brand_kits, content_items] = await Promise.all([sliceProjects(), sliceBrandKits(), sliceContentItems()]);
+  return sourceOf({ projects, brand_kits, content_items });
 }
 
 /** The full dashboard. Only the Overview, /api/overview and the command

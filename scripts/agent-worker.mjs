@@ -303,6 +303,30 @@ if (useDatabaseMode) {
                     );
                     proposalCount += 1;
                   }
+                  // Mirror createContentItemTool in lib/ai/tool-registry.ts:
+                  // only agents that hold request_content_item may propose
+                  // planner content, the run must be project-scoped, and
+                  // fields are bounded the same way before approvals.
+                  const canProposeContent = Array.isArray(task.agent_allowed_actions) && task.agent_allowed_actions.includes("request_content_item");
+                  const contentTypes = new Set(["post", "reel", "story", "article"]);
+                  for (const [idx, prop] of parsed.proposed_actions.slice(0, 5).entries()) {
+                    if (prop?.type !== "create_content_item" || !canProposeContent || !task.project_id) continue;
+                    const title = boundedText(prop.title, 160);
+                    const contentType = typeof prop.content_type === "string" && contentTypes.has(prop.content_type) ? prop.content_type : "";
+                    const caption = boundedText(prop.caption, 2200);
+                    const imagePrompt = boundedText(prop.image_prompt, 500);
+                    const reason = boundedText(prop.reason, 500);
+                    const scheduledRaw = typeof prop.scheduled_for === "string" ? prop.scheduled_for.trim().match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? "" : "";
+                    const scheduledFor = scheduledRaw && !Number.isNaN(new Date(`${scheduledRaw}T12:00:00Z`).getTime()) ? scheduledRaw : "";
+                    if (title.length < 3 || !contentType || reason.length < 8) continue;
+                    await pool.query(
+                      `INSERT INTO approvals (project_id,requested_by,action,risk_level,reason,agent_run_id,agent_id,action_type,proposal_index,payload)
+                       VALUES ($1,$2,$3,'medium',$4,$5,$6,'create_content_item',$7,$8::jsonb)
+                       ON CONFLICT (agent_run_id,proposal_index) WHERE agent_run_id IS NOT NULL AND proposal_index IS NOT NULL DO NOTHING`,
+                      [task.project_id, task.agent_name ?? "Agent", `Add to content planner (${contentType}): ${title}`, reason, claimed.id, task.agent_id, idx, JSON.stringify({ title, content_type: contentType, caption, image_prompt: imagePrompt, scheduled_for: scheduledFor })],
+                    );
+                    proposalCount += 1;
+                  }
                 }
               }
             } catch (propErr) {

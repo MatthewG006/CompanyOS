@@ -117,6 +117,7 @@ export function buildTaskPrompt(task: AgentTask, memory: AgentMemory = {}) {
     ...(task.agent_allowed_actions?.includes("request_email_outreach") && task.agent_name?.toLowerCase() === "sales" && Array.isArray((memory as AgentMemory).sales_opportunities) ? ["send_email"] : []),
     ...(task.agent_allowed_actions?.includes("request_support_case_update") && task.agent_name?.toLowerCase() === "support" && (memory as AgentMemory).support_case ? ["update_support_case"] : []),
     ...(task.agent_allowed_actions?.includes("request_wordpress_publish") ? ["publish_wordpress_post"] : []),
+    ...(task.agent_allowed_actions?.includes("request_content_item") ? ["create_content_item"] : []),
   ];
   return [
     `You are acting as ${role} for CompanyOS.`,

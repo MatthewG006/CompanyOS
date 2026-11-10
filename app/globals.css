@@ -447,3 +447,29 @@ button, input { font: inherit; }
 .brand-swatch-row { display: flex; gap: 6px; align-items: center; margin: 8px 0; }
 .brand-swatch { width: 22px; height: 22px; border-radius: 6px; border: 1px solid rgba(255,255,255,.25); display: inline-block; }
 .brand-kit-panel .panel-head p { margin: 5px 0 0; max-width: 720px; }
+
+/* Lead Desk Phase 2: content planner + design studio */
+.planner-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+.planner-weeknav { display: flex; align-items: center; gap: 10px; }
+.planner-week-label { font-size: 14px; color: #dbe4f5; }
+.planner-toolbar-actions { display: flex; align-items: center; gap: 10px; }
+.planner-due { color: #fbbf24; }
+.planner-week { display: grid; grid-template-columns: repeat(8, minmax(150px, 1fr)); gap: 10px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 16px; }
+.planner-day { background: rgba(17,24,42,.55); border: 1px solid var(--border); border-radius: 12px; padding: 9px; min-height: 120px; display: flex; flex-direction: column; gap: 8px; }
+.planner-ideas { border-style: dashed; }
+.planner-day-head { font-size: 11px; color: #8fa0bd; text-transform: uppercase; letter-spacing: .04em; }
+.planner-card { text-align: left; background: rgba(12,19,35,.9); border: 1px solid #2c3b5b; border-radius: 10px; padding: 9px 10px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; color: var(--text); }
+.planner-card.active { border-color: var(--accent); }
+.planner-card-type { font-size: 10px; color: #7dd3fc; letter-spacing: .06em; }
+.planner-card-title { font-size: 13px; line-height: 1.35; }
+.planner-card-meta { font-size: 11px; color: #74819c; }
+.planner-create { margin-bottom: 16px; }
+.content-panel .router-field { margin-bottom: 12px; }
+.content-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+.studio-block { margin: 14px 0; }
+.studio-chosen { display: flex; align-items: center; gap: 12px; }
+.studio-chosen img { max-height: 140px; border-radius: 10px; border: 1px solid var(--border); }
+.studio-options { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.studio-option { display: flex; flex-direction: column; gap: 8px; align-items: start; }
+.studio-option img { width: 150px; height: 150px; object-fit: cover; border-radius: 10px; border: 1px solid var(--border); }
+@media (max-width: 900px) { .planner-week { grid-template-columns: repeat(8, 170px); } }
