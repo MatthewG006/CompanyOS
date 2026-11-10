@@ -30,6 +30,7 @@ export type AgentTask = {
 export type AgentMemory = {
   project?: unknown;
   owner_managed_project_memory?: unknown;
+  brand_kit?: unknown;
   tasks?: unknown[];
   systems?: unknown[];
   sales_opportunities?: Array<{ opportunity_title: string; stage: string; contact_name: string | null; contact_email: string; organization: string | null }>;

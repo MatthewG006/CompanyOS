@@ -18,6 +18,19 @@ export async function loadAgentMemory(projectId: string | null, requestedScopes:
     const ownerMemory = await query(`SELECT LEFT(title,120) AS title,LEFT(content,5000) AS content
       FROM project_memories WHERE project_id=$1`, [projectId]);
     if (ownerMemory.rows[0]) memory.owner_managed_project_memory = ownerMemory.rows[0];
+
+    // The brand kit is project-scope identity (colors, fonts, services,
+    // Instagram handle): content and design work should sound like the
+    // business. Tolerate a missing table on an unmigrated database.
+    try {
+      const brandKit = await query(`SELECT LEFT(website_url,300) AS website_url,LEFT(logo_url,500) AS logo_url,colors,fonts,
+          LEFT(phone,40) AS phone,LEFT(service_area,200) AS service_area,services,
+          LEFT(instagram_username,60) AS instagram_username,LEFT(tagline,160) AS tagline
+        FROM brand_kits WHERE project_id=$1`, [projectId]);
+      if (brandKit.rows[0]) memory.brand_kit = brandKit.rows[0];
+    } catch {
+      // brand_kits not migrated yet on this database; memory still loads.
+    }
   }
 
   if (scopes.has("tasks")) {

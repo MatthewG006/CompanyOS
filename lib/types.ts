@@ -167,6 +167,22 @@ export type AttentionItem = {
   contact_name?: string | null;
 };
 
+export type BrandKit = {
+  project_id: string;
+  project_name?: string;
+  website_url: string;
+  logo_url: string;
+  colors: string[];
+  fonts: string[];
+  phone: string;
+  service_area: string;
+  services: string[];
+  instagram_username: string;
+  tagline: string;
+  source: string;
+  updated_at?: string | null;
+};
+
 export type DashboardData = {
   source: "database" | "demo";
   generated_at: string;

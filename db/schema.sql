@@ -507,6 +507,25 @@ CREATE TABLE IF NOT EXISTS runtime_heartbeats (
   last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- One brand kit per project: the identity the agency departments design and
+-- write with (Lead Desk model). Read automatically from the business website
+-- where possible; the owner reviews and saves. Joins the bounded project
+-- memory scope agents receive.
+CREATE TABLE IF NOT EXISTS brand_kits (
+  project_id UUID PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  website_url TEXT NOT NULL DEFAULT '',
+  logo_url TEXT NOT NULL DEFAULT '',
+  colors JSONB NOT NULL DEFAULT '[]'::jsonb,
+  fonts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  phone TEXT NOT NULL DEFAULT '',
+  service_area TEXT NOT NULL DEFAULT '',
+  services JSONB NOT NULL DEFAULT '[]'::jsonb,
+  instagram_username TEXT NOT NULL DEFAULT '',
+  tagline TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'manual',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Existing synced attention is baseline data. Do not create a backlog of agent work on upgrade.
 INSERT INTO workflow_dispatches (workflow_key, attention_item_id, project_id, status)
 SELECT 'gmail_attention_to_agent_task_v1', ai.id, ai.project_id, 'existing_at_enablement'

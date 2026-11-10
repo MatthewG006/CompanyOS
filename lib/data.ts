@@ -3,6 +3,7 @@ import type {
   Agent,
   Approval,
   AttentionItem,
+  BrandKit,
   Contact,
   DashboardData,
   EventItem,
@@ -68,6 +69,12 @@ export const demoIntegrations: IntegrationConnection[] = [
   { id: "i5", name: "Nextcloud", provider: "nextcloud", kind: "storage", status: "planned", mode: "local", last_sync_at: null, last_error: null, description: "Configure NEXTCLOUD_URL for Sky Mountain Cloud health checks." },
   { id: "i6", name: "Firebase / Analytics", provider: "firebase", kind: "analytics", status: "planned", mode: "webhook", last_sync_at: null, last_error: null, description: "Use the signed event-ingest endpoint or n8n to forward approved product analytics." },
   { id: "i7", name: "n8n", provider: "n8n", kind: "automation", status: "planned", mode: "webhook", last_sync_at: null, last_error: null, description: "Send signed operational events to CompanyOS from n8n workflows." },
+];
+
+export const demoBrandKits: BrandKit[] = [
+  { project_id: "demo-1", project_name: "Sky Mountain Cloud", website_url: "https://skymountaincloud.com", logo_url: "", colors: ["#1e3a5f", "#38bdf8", "#f8fafc"], fonts: ["Inter"], phone: "", service_area: "", services: ["Nextcloud hosting", "Account provisioning", "Onboarding and support"], instagram_username: "skymountaincloud", tagline: "Sky Mountain Cloud", source: "demo" },
+  { project_id: "demo-2", project_name: "Plenty of Plants", website_url: "", logo_url: "", colors: ["#166534", "#86efac", "#fefce8"], fonts: ["Inter"], phone: "", service_area: "", services: ["Plant care game", "Nursery partnerships"], instagram_username: "", tagline: "Plenty of Plants", source: "demo" },
+  { project_id: "demo-3", project_name: "Sky Mountain Graphics", website_url: "", logo_url: "", colors: ["#7c2d12", "#f59e0b", "#fff7ed"], fonts: ["Montserrat"], phone: "", service_area: "", services: ["Graphic design", "Web design", "Branding"], instagram_username: "skymountaingraphics", tagline: "Sky Mountain Graphics", source: "demo" },
 ];
 
 const demoContacts: Contact[] = [
@@ -223,6 +230,34 @@ async function sliceAttention(): Promise<AttentionItem[]> {
       WHERE ai.status='open' ORDER BY CASE ai.priority WHEN 'high' THEN 1 ELSE 2 END,COALESCE(ai.due_at,'2999-12-31'::timestamptz),ai.created_at DESC LIMIT 30`)).rows;
 }
 
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+async function sliceBrandKits(): Promise<BrandKit[]> {
+  if ((await dbSource()) === "demo") return demoBrandKits;
+  const rows = (await query<BrandKit & { colors: unknown; fonts: unknown; services: unknown }>(`SELECT p.id AS project_id,p.name AS project_name,bk.website_url,bk.logo_url,bk.colors,bk.fonts,bk.phone,
+      bk.service_area,bk.services,bk.instagram_username,bk.tagline,bk.source,bk.updated_at::text
+      FROM projects p LEFT JOIN brand_kits bk ON bk.project_id=p.id ORDER BY p.name`)).rows;
+  // One row per project: a project without a saved kit gets an empty kit the
+  // owner can fill in, so the Agency desk always shows all three businesses.
+  return rows.map((row) => ({
+    project_id: row.project_id,
+    project_name: row.project_name,
+    website_url: row.website_url ?? "",
+    logo_url: row.logo_url ?? "",
+    colors: asStringArray(row.colors),
+    fonts: asStringArray(row.fonts),
+    phone: row.phone ?? "",
+    service_area: row.service_area ?? "",
+    services: asStringArray(row.services),
+    instagram_username: row.instagram_username ?? "",
+    tagline: row.tagline ?? "",
+    source: row.source ?? "manual",
+    updated_at: row.updated_at ?? null,
+  }));
+}
+
 async function sourceOf<T extends object>(slices: T): Promise<T & { source: Source }> {
   return { source: await dbSource(), ...slices };
 }
@@ -271,6 +306,17 @@ export async function getOperationsData() {
 export async function getIntelligenceData() {
   const [contacts, meetings, attention_items] = await Promise.all([sliceContacts(), sliceMeetings(), sliceAttention()]);
   return sourceOf({ contacts, meetings, attention_items });
+}
+
+export async function getBrandKitsData() {
+  return sourceOf({ brand_kits: await sliceBrandKits() });
+}
+
+/** The Agency desk (Lead Desk model): departments with live work, the
+ *  pending-approval queue, and one brand kit per business. */
+export async function getAgencyData() {
+  const [projects, agents, tasks, approvals, brand_kits] = await Promise.all([sliceProjects(), sliceAgents(), sliceTasks(), sliceApprovals(), sliceBrandKits()]);
+  return sourceOf({ projects, agents, tasks, approvals, brand_kits });
 }
 
 /** The full dashboard. Only the Overview, /api/overview and the command
