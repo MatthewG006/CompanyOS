@@ -2,19 +2,13 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query, transaction } from "@/lib/db";
-import { queueTaskExecution } from "@/lib/ai/queue-task-run";
+import { queueFirstResponse } from "@/lib/ai/first-response";
+import { startOnboardingForWonLead } from "@/lib/sales/onboarding";
 
 export const dynamic = "force-dynamic";
 
 const stages = new Set(["new", "qualified", "proposal", "won", "lost"]);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const onboardingChecklist = [
-  "Confirm customer requirements and primary contact",
-  "Review project setup and required access",
-  "Prepare welcome and getting-started materials for owner review",
-  "Verify initial customer access and service readiness",
-  "Schedule kickoff and capture next steps",
-];
 
 function authorized(request: Request) {
   if (process.env.NODE_ENV === "production" && request.headers.get("x-companyos-owner-authenticated") === "true") return true;
@@ -45,7 +39,7 @@ export async function GET(request: Request) {
   if (!authorized(request)) return denied();
   if (!(await databaseAvailable())) return databaseUnavailable();
   const result = await query(`SELECT l.id,l.project_id,p.name AS project_name,l.contact_id,c.name AS contact_name,c.email,c.phone,c.organization,
-      l.opportunity_title,l.stage,l.estimated_value_cents::text,l.follow_up_at::text,l.notes,l.source_attention_item_id,l.created_at::text,l.updated_at::text,
+      l.opportunity_title,l.stage,l.estimated_value_cents::text,l.follow_up_at::text,l.notes,l.source_attention_item_id,l.first_contacted_at::text,l.created_at::text,l.updated_at::text,
       email_pref.status AS email_preference,whatsapp_pref.status AS whatsapp_preference,
       reminder.id AS reminder_id,reminder.status AS reminder_status,reminder.task_id AS reminder_task_id
     FROM sales_leads l JOIN projects p ON p.id=l.project_id JOIN contacts c ON c.id=l.contact_id
@@ -108,6 +102,11 @@ export async function POST(request: Request) {
         projectId,
         JSON.stringify({ lead_id: lead.rows[0].id, stage, estimated_value_cents: valueCents }),
       ]);
+      // Lead Desk speed rule: a fresh lead gets a first-response task for
+      // the Sales agent immediately, queued for autonomous execution.
+      if (stage === "new") {
+        await queueFirstResponse(client, { projectId, leadId: lead.rows[0].id, leadTitle: title });
+      }
       return lead.rows[0];
     });
     if (!created) return NextResponse.json({ error: "Project not found." }, { status: 404 });
@@ -133,13 +132,14 @@ export async function PATCH(request: Request) {
     }
 
     const updated = await transaction(async (client) => {
-      const previousResult = await client.query<{ follow_up_at: string | null }>("SELECT follow_up_at::text FROM sales_leads WHERE id=$1 FOR UPDATE", [leadId]);
+      const previousResult = await client.query<{ follow_up_at: string | null; stage: string; first_contacted_at: string | null }>("SELECT follow_up_at::text,stage,first_contacted_at::text FROM sales_leads WHERE id=$1 FOR UPDATE", [leadId]);
       const previous = previousResult.rows[0];
       if (!previous) return null;
+      const firstContact = previous.stage === "new" && stage !== "new" && !previous.first_contacted_at ? new Date() : null;
       const result = await client.query<{ id: string; project_id: string; opportunity_title: string }>(
-        `UPDATE sales_leads SET stage=$2,estimated_value_cents=$3,follow_up_at=$4,notes=$5,updated_at=NOW()
+        `UPDATE sales_leads SET stage=$2,estimated_value_cents=$3,follow_up_at=$4,notes=$5,first_contacted_at=COALESCE(first_contacted_at,$6),updated_at=NOW()
          WHERE id=$1 RETURNING id,project_id,opportunity_title`,
-        [leadId, stage, valueCents, followUp.date, notes],
+        [leadId, stage, valueCents, followUp.date, notes, firstContact],
       );
       const lead = result.rows[0];
       if (!lead) return null;
@@ -154,43 +154,7 @@ export async function PATCH(request: Request) {
           WHERE id IN (SELECT task_id FROM sales_followup_reminders WHERE sales_lead_id=$1 AND status=$2 AND task_id IS NOT NULL)`, [leadId, reminderStatus]);
       }
       if (stage === "won") {
-        const source = await client.query<{ contact_id: string }>("SELECT contact_id FROM sales_leads WHERE id=$1", [lead.id]);
-        const onboarding = await client.query<{ id: string }>(
-          `INSERT INTO customer_onboardings (sales_lead_id,project_id,contact_id)
-           VALUES ($1,$2,$3) ON CONFLICT (sales_lead_id) DO NOTHING RETURNING id`,
-          [lead.id, lead.project_id, source.rows[0].contact_id],
-        );
-        if (onboarding.rows[0]) {
-          const support = await client.query<{ id: string }>("SELECT id FROM agents WHERE LOWER(name)='support' LIMIT 1");
-          for (const [index, stepTitle] of onboardingChecklist.entries()) {
-            const task = await client.query<{ id: string }>(
-              `INSERT INTO tasks (project_id,agent_id,title,priority,status)
-               VALUES ($1,$2,$3,'normal','todo') RETURNING id`,
-              [lead.project_id, support.rows[0]?.id ?? null, `Customer onboarding: ${stepTitle}`],
-            );
-            await client.query(
-              `INSERT INTO onboarding_steps (onboarding_id,task_id,position,title)
-               VALUES ($1,$2,$3,$4)`,
-              [onboarding.rows[0].id, task.rows[0].id, index + 1, stepTitle],
-            );
-            if (support.rows[0]?.id) {
-              await queueTaskExecution(client, {
-                projectId: lead.project_id,
-                agentId: support.rows[0].id,
-                taskId: task.rows[0].id,
-                title: `Customer onboarding: ${stepTitle}`,
-                priority: "normal",
-                source: "customer_onboarding",
-              });
-            }
-          }
-          await client.query(`INSERT INTO events (source,event_type,title,severity,project_id,payload)
-            VALUES ('customer-onboarding','customer_onboarding_started',$1,'info',$2,$3::jsonb)`, [
-            `Customer onboarding started: ${lead.opportunity_title}`,
-            lead.project_id,
-            JSON.stringify({ onboarding_id: onboarding.rows[0].id, sales_lead_id: lead.id, steps_created: onboardingChecklist.length }),
-          ]);
-        }
+        await startOnboardingForWonLead(client, lead);
       }
       await client.query(`INSERT INTO events (source,event_type,title,severity,project_id,payload)
         VALUES ('sales-pipeline','sales_lead_updated',$1,'info',$2,$3::jsonb)`, [

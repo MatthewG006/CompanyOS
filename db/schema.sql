@@ -383,6 +383,24 @@ WHERE LOWER(name)='sales' AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'requ
 UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_wordpress_publish"]'::jsonb
 WHERE LOWER(name) IN ('engineer', 'designer', 'graphics', 'marketing') AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_wordpress_publish');
 
+-- Allow Marketing to propose content planner items (Lead Desk Phase 2)
+UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_content_item"]'::jsonb
+WHERE LOWER(name)='marketing' AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_content_item');
+
+-- Lead Desk Phase 3: outcome log + first-response timing per lead. Outcomes
+-- are the one-tap result reports (contacted / visit / quote / won / lost);
+-- first_contacted_at powers the Results first-response KPI.
+ALTER TABLE sales_leads ADD COLUMN IF NOT EXISTS first_contacted_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS lead_outcomes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  lead_id UUID NOT NULL REFERENCES sales_leads(id) ON DELETE CASCADE,
+  outcome TEXT NOT NULL CHECK (outcome IN ('contacted','visit','quote','won','lost')),
+  note TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_lead_outcomes_lead ON lead_outcomes(lead_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS contact_channel_preferences (
   contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
   channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp')),

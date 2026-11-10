@@ -473,3 +473,13 @@ button, input { font: inherit; }
 .studio-option { display: flex; flex-direction: column; gap: 8px; align-items: start; }
 .studio-option img { width: 150px; height: 150px; object-fit: cover; border-radius: 10px; border: 1px solid var(--border); }
 @media (max-width: 900px) { .planner-week { grid-template-columns: repeat(8, 170px); } }
+
+/* Lead Desk Phase 3: lead outcomes + results */
+.sales-outcome-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.sales-outcome-label { font-size: 11px; color: #8fa0bd; text-transform: uppercase; letter-spacing: .04em; margin-right: 2px; }
+.results-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.results-kpi { background: rgba(17,24,42,.84); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+.results-kpi-value { font-size: 26px; font-weight: 700; color: #f1f5ff; }
+.results-kpi-label { font-size: 11px; color: #8fa0bd; text-transform: uppercase; letter-spacing: .05em; margin-top: 4px; }
+.results-kpi-sub { font-size: 12px; color: #95a1b8; margin-top: 6px; }
+.results-feed { list-style: none; margin: 0; padding: 0; font-size: 13px; color: #c6d0e4; line-height: 1.8; }

@@ -201,6 +201,27 @@ export type ContentItem = {
   updated_at?: string;
 };
 
+export type SalesLeadRow = {
+  id: string;
+  project_id?: string;
+  project_name?: string;
+  opportunity_title: string;
+  stage: "new" | "qualified" | "proposal" | "won" | "lost";
+  estimated_value_cents: string | number;
+  created_at: string;
+  first_contacted_at: string | null;
+};
+
+export type LeadOutcome = {
+  id: string;
+  lead_id: string;
+  project_name?: string;
+  opportunity_title?: string;
+  outcome: "contacted" | "visit" | "quote" | "won" | "lost";
+  note?: string;
+  created_at: string;
+};
+
 export type DashboardData = {
   source: "database" | "demo";
   generated_at: string;

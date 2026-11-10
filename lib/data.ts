@@ -6,6 +6,8 @@ import type {
   BrandKit,
   Contact,
   ContentItem,
+  LeadOutcome,
+  SalesLeadRow,
   DashboardData,
   EventItem,
   ExternalRecord,
@@ -91,6 +93,26 @@ export const demoContentItems: ContentItem[] = [
   { id: "ci-4", project_id: "demo-2", project_name: "Plenty of Plants", type: "post", title: "Meet the cast: the fern that survives everything", caption: "Some plants are just built different.", image_prompt: "Close-up of a lush fern in a terracotta pot by a window", image_url: "", image_options: [], status: "draft", scheduled_for: null, published_url: "", created_by: "owner" },
   { id: "ci-5", project_id: "demo-3", project_name: "Sky Mountain Graphics", type: "post", title: "Before / after: a logo refresh", caption: "Same business, sharper first impression.", image_prompt: "Split design desk scene: rough sketches on the left, polished logo on the right", image_url: "", image_options: [], status: "scheduled", scheduled_for: demoWeekDate(4), published_url: "", created_by: "Marketing" },
   { id: "ci-6", project_id: "demo-3", project_name: "Sky Mountain Graphics", type: "article", title: "What a small-business website must do in 2026", caption: "Draft for the WordPress blog.", image_prompt: "", image_url: "", image_options: [], status: "in_review", scheduled_for: demoWeekDate(5), published_url: "", created_by: "Marketing" },
+];
+
+function hoursAgo(hours: number): string {
+  return new Date(Date.now() - hours * 3_600_000).toISOString();
+}
+
+export const demoSalesLeads: SalesLeadRow[] = [
+  { id: "lead-1", project_id: "demo-3", project_name: "Sky Mountain Graphics", opportunity_title: "Logo and storefront sign refresh", stage: "proposal", estimated_value_cents: 180000, created_at: hoursAgo(50), first_contacted_at: hoursAgo(49.93) },
+  { id: "lead-2", project_id: "demo-3", project_name: "Sky Mountain Graphics", opportunity_title: "Restaurant menu design package", stage: "won", estimated_value_cents: 95000, created_at: hoursAgo(160), first_contacted_at: hoursAgo(157) },
+  { id: "lead-3", project_id: "demo-1", project_name: "Sky Mountain Cloud", opportunity_title: "Bakery team cloud setup (6 seats)", stage: "qualified", estimated_value_cents: 72000, created_at: hoursAgo(30), first_contacted_at: hoursAgo(28) },
+  { id: "lead-4", project_id: "demo-1", project_name: "Sky Mountain Cloud", opportunity_title: "Photo studio backup migration", stage: "new", estimated_value_cents: 54000, created_at: hoursAgo(5), first_contacted_at: null },
+  { id: "lead-5", project_id: "demo-2", project_name: "Plenty of Plants", opportunity_title: "Café plant-care partnership", stage: "proposal", estimated_value_cents: 40000, created_at: hoursAgo(96), first_contacted_at: hoursAgo(90) },
+  { id: "lead-6", project_id: "demo-2", project_name: "Plenty of Plants", opportunity_title: "Office greenery subscription", stage: "lost", estimated_value_cents: 60000, created_at: hoursAgo(240), first_contacted_at: hoursAgo(214) },
+];
+
+export const demoLeadOutcomes: LeadOutcome[] = [
+  { id: "oc-1", lead_id: "lead-1", project_name: "Sky Mountain Graphics", opportunity_title: "Logo and storefront sign refresh", outcome: "quote", created_at: hoursAgo(20) },
+  { id: "oc-2", lead_id: "lead-2", project_name: "Sky Mountain Graphics", opportunity_title: "Restaurant menu design package", outcome: "won", created_at: hoursAgo(120) },
+  { id: "oc-3", lead_id: "lead-3", project_name: "Sky Mountain Cloud", opportunity_title: "Bakery team cloud setup (6 seats)", outcome: "contacted", created_at: hoursAgo(28) },
+  { id: "oc-4", lead_id: "lead-5", project_name: "Plenty of Plants", opportunity_title: "Café plant-care partnership", outcome: "visit", created_at: hoursAgo(80) },
 ];
 
 const demoContacts: Contact[] = [
@@ -283,6 +305,21 @@ async function sliceContentItems(): Promise<ContentItem[]> {
   return rows.map((row) => ({ ...row, image_options: asStringArray(row.image_options) }));
 }
 
+async function sliceSalesLeads(): Promise<SalesLeadRow[]> {
+  if ((await dbSource()) === "demo") return demoSalesLeads;
+  return (await query<SalesLeadRow>(`SELECT l.id,l.project_id,p.name AS project_name,l.opportunity_title,l.stage,
+      l.estimated_value_cents::text,l.created_at::text,l.first_contacted_at::text
+      FROM sales_leads l JOIN projects p ON p.id=l.project_id
+      ORDER BY l.created_at DESC LIMIT 200`)).rows;
+}
+
+async function sliceLeadOutcomes(): Promise<LeadOutcome[]> {
+  if ((await dbSource()) === "demo") return demoLeadOutcomes;
+  return (await query<LeadOutcome>(`SELECT o.id,o.lead_id,p.name AS project_name,l.opportunity_title,o.outcome,o.note,o.created_at::text
+      FROM lead_outcomes o JOIN sales_leads l ON l.id=o.lead_id JOIN projects p ON p.id=l.project_id
+      ORDER BY o.created_at DESC LIMIT 60`)).rows;
+}
+
 async function sourceOf<T extends object>(slices: T): Promise<T & { source: Source }> {
   return { source: await dbSource(), ...slices };
 }
@@ -349,6 +386,13 @@ export async function getAgencyData() {
 export async function getContentData() {
   const [projects, brand_kits, content_items] = await Promise.all([sliceProjects(), sliceBrandKits(), sliceContentItems()]);
   return sourceOf({ projects, brand_kits, content_items });
+}
+
+/** The Results roll-up (Lead Desk Phase 3): leads with first-response
+ *  timing, the outcome log, and content output, per business. */
+export async function getResultsData() {
+  const [projects, sales_leads, lead_outcomes, content_items] = await Promise.all([sliceProjects(), sliceSalesLeads(), sliceLeadOutcomes(), sliceContentItems()]);
+  return sourceOf({ projects, sales_leads, lead_outcomes, content_items });
 }
 
 /** The full dashboard. Only the Overview, /api/overview and the command

@@ -35,8 +35,10 @@ test("approved and owner-created tasks queue execution automatically", () => {
   assert.match(tasks, /source: "api_task_created"/, "API tasks must record their queue source");
 
   const leads = read("app/api/sales/leads/route.ts");
-  assert.match(leads, /queueTaskExecution/, "onboarding step tasks must queue for the Support agent");
-  assert.match(leads, /source: "customer_onboarding"/, "onboarding tasks must record their queue source");
+  assert.match(leads, /startOnboardingForWonLead\(client, lead\)/, "won leads must start onboarding through the shared helper");
+  const onboarding = read("lib/sales/onboarding.ts");
+  assert.match(onboarding, /queueTaskExecution/, "onboarding step tasks must queue for the Support agent");
+  assert.match(onboarding, /source: "customer_onboarding"/, "onboarding tasks must record their queue source");
 });
 
 test("the worker claims Codex CLI runs without any manual step", () => {
