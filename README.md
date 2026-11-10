@@ -219,7 +219,13 @@ New screen: `/intelligence`. New API: `PATCH /api/attention`.
 
 ## Production deployment
 
-For the private Proxmox deployment baseline, Docker Compose setup, required secrets, migrations, backup guidance, and remaining security boundaries, see [production/DEPLOYMENT.md](production/DEPLOYMENT.md).
+Production currently runs hosted:
+
+- **App** — the Next.js app is deployed on Vercel from this repository; pull requests receive Vercel preview deployments and checks.
+- **Database** — production PostgreSQL is hosted on Supabase; schema changes reach it with `npm run db:migrate`, as with any other environment.
+- **Agent worker** — the Codex CLI worker runs on an LXC on the owner's Proxmox VE home-lab server and polls the app over HTTP (see the worker notes under "Run locally"). Codex CLI is installed and signed in on that host.
+
+The repository also ships a private self-hosted baseline — Docker Compose on Proxmox behind a Cloudflare Tunnel — in [production/DEPLOYMENT.md](production/DEPLOYMENT.md), covering setup, required secrets, migrations, backup guidance, and remaining security boundaries. That document is the self-hosted deployment path, not the current live topology.
 
 ### AI Router and database safety
 
