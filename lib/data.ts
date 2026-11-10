@@ -77,7 +77,7 @@ export const demoIntegrations: IntegrationConnection[] = [
 export const demoBrandKits: BrandKit[] = [
   { project_id: "demo-1", project_name: "Sky Mountain Cloud", website_url: "https://skymountaincloud.com", logo_url: "", colors: ["#1e3a5f", "#38bdf8", "#f8fafc"], fonts: ["Inter"], phone: "", service_area: "", services: ["Nextcloud hosting", "Account provisioning", "Onboarding and support"], instagram_username: "skymountaincloud", tagline: "Sky Mountain Cloud", source: "demo" },
   { project_id: "demo-2", project_name: "Plenty of Plants", website_url: "", logo_url: "", colors: ["#166534", "#86efac", "#fefce8"], fonts: ["Inter"], phone: "", service_area: "", services: ["Plant care game", "Nursery partnerships"], instagram_username: "", tagline: "Plenty of Plants", source: "demo" },
-  { project_id: "demo-3", project_name: "Sky Mountain Graphics", website_url: "", logo_url: "", colors: ["#7c2d12", "#f59e0b", "#fff7ed"], fonts: ["Montserrat"], phone: "", service_area: "", services: ["Graphic design", "Web design", "Branding"], instagram_username: "skymountaingraphics", tagline: "Sky Mountain Graphics", source: "demo" },
+  { project_id: "demo-3", project_name: "Sky Mountain Graphics", website_url: "", logo_url: "", colors: ["#4196b3", "#54c9ea", "#ffffff"], fonts: ["Montserrat"], phone: "", service_area: "", services: ["Graphic design", "Web design", "Branding"], instagram_username: "skymountaingraphics", tagline: "Sky Mountain Graphics", source: "demo" },
 ];
 
 function demoWeekDate(offsetDays: number): string {

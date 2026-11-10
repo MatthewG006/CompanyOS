@@ -38,7 +38,8 @@ export default function LoginPage() {
 
   return <section className="auth-screen">
     <div className="auth-card">
-      <div className="brand-mark">SM</div>
+      {/* biome-ignore lint/performance/noImgElement: static brand logo from /public, no optimization needed */}
+      <img className="brand-logo auth-logo" src="/brand-logo.png" alt="Sky Mountain Graphics logo" width={52} height={52} />
       <p className="auth-eyebrow">SKY MOUNTAIN</p>
       <h1>CompanyOS</h1>
       <p className="auth-description">Sign in with the owner token configured on the CompanyOS server.</p>
