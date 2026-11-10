@@ -1,3 +1,4 @@
+import { DemoBanner } from "@/components/DemoBanner";
 import { Topbar } from "@/components/Topbar";
 import { IntegrationManager } from "@/components/IntegrationManager";
 import { StatusDot } from "@/components/StatusDot";
@@ -18,6 +19,7 @@ export default async function CommunicationsPage() {
      FROM outbound_messages ORDER BY created_at DESC LIMIT 12`,
   ).then((result) => result.rows).catch(() => []);
   return <div className="page-wrap">
+    <DemoBanner source={data.source} />
     <Topbar title="Communications" subtitle="Business email and calendar context synchronized into the Company Brain." />
     <IntegrationManager integrations={data.integrations.filter((item) => ["Gmail", "Google Calendar"].includes(item.name))} />
     <div className="panel section-gap"><div className="panel-head"><div><h2>Sales email readiness</h2><p className="muted">The Sales agent only prepares a draft. Each exact message must be approved here before Gmail sends it.</p></div><span className="data-source">{sendReady && postalReady ? "READY" : "SETUP REQUIRED"}</span></div><div className="list-stack"><div className="list-item"><StatusDot status={sendReady ? "healthy" : "warning"} /><span>Gmail send permission {sendReady ? "granted" : "missing — reconnect Google to approve the Gmail send scope"}</span></div><div className="list-item"><StatusDot status={postalReady ? "healthy" : "warning"} /><span>Business postal address {postalReady ? "configured" : "missing — set COMPANYOS_POSTAL_ADDRESS in the CompanyOS server environment"}</span></div><p className="muted">Enable “Sales contacts and emails” memory and “Draft sales email” permission for the Sales agent under Agents. Email opt-outs suppress future drafts. WhatsApp consent can be recorded in Sales; WhatsApp sending still requires a connected Business Platform sender and approved templates.</p></div></div>

@@ -1,3 +1,4 @@
+import { DemoBanner } from "@/components/DemoBanner";
 import { Topbar } from "@/components/Topbar";
 import { StatusDot } from "@/components/StatusDot";
 import { AttentionList } from "@/components/AttentionList";
@@ -10,6 +11,7 @@ export default async function IntelligencePage() {
   const data = await getDashboardData();
   return (
     <div className="page-wrap">
+      <DemoBanner source={data.source} />
       <Topbar title="Business Intelligence" subtitle="Contacts, upcoming meetings and actionable attention derived from the Company Brain." />
       <section className="section-block"><WorkflowMonitor /></section>
       <section className="section-block">

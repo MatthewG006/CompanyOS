@@ -200,6 +200,8 @@ button, input { font: inherit; }
 .refresh-button:disabled, .approval-actions button:disabled { opacity:.6; cursor:wait; }
 .approval-actions button.danger { color:#f58b95; }
 .refresh-meta { color:#65728b; font-size:10px; margin:-10px 0 18px; }
+.demo-banner { background: #f6c453; color: #17203a; border-radius: 10px; padding: 12px 14px; font-size: 13px; line-height: 1.5; margin-bottom: 18px; }
+.demo-banner strong { font-weight: 800; }
 .approval-item { display:flex; justify-content:space-between; gap:16px; padding:13px 0; border-top:1px solid rgba(34,48,74,.7); }
 .approval-item:first-child { border-top:0; }
 .approval-main { display:flex; gap:10px; min-width:0; }

@@ -13,6 +13,7 @@ const money = (cents: string | number) => new Intl.NumberFormat("en-US", { style
 
 export function FinanceLedger({ authRequired }: { authRequired: boolean }) {
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [importBatches, setImportBatches] = useState<ImportBatch[]>([]);
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -38,8 +39,9 @@ export function FinanceLedger({ authRequired }: { authRequired: boolean }) {
     setImportBatches((importBody.batches ?? []) as ImportBatch[]);
     setImportRows((importBody.rows ?? []) as ImportRow[]);
     setForm((current) => ({ ...current, transaction_date: current.transaction_date || today() }));
+    setLoaded(true);
   }, [headers]);
-  useEffect(() => { void refresh().catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Could not load financial ledger.")); }, [refresh]);
+  useEffect(() => { void refresh().catch((error: unknown) => { setMessage(error instanceof Error ? error.message : "Could not load financial ledger."); setLoaded(true); }); }, [refresh]);
 
   async function addEntry(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -136,14 +138,14 @@ export function FinanceLedger({ authRequired }: { authRequired: boolean }) {
         <label className="router-field">Project<select value={row.project_id ?? ""} onChange={(event) => editImportRow(row.id, "project_id", event.target.value)}><option value="">Company-wide</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
         <div className="ledger-import-actions">{row.status === "pending" ? <button className="refresh-button" type="button" disabled={busy} onClick={() => void reviewImportRow(row, "record")}>Record row</button> : <button className="refresh-button" type="button" disabled={busy} onClick={() => void reviewImportRow(row, "record_distinct")}>Record as distinct</button>}<button className="refresh-button" type="button" disabled={busy} onClick={() => void reviewImportRow(row, "reject")}>Reject</button></div>
       </article>)}</div>
-      {importRows.every((row) => !["pending", "duplicate"].includes(row.status)) ? <div className="empty-state">No imported rows are waiting for review.</div> : null}
+      {!loaded ? <div className="empty-state">Loading imports…</div> : importRows.every((row) => !["pending", "duplicate"].includes(row.status)) ? <div className="empty-state">No imported rows are waiting for review.</div> : null}
     </section>
     <section className="ledger-list"><div className="section-title-row"><div><h2>Recent ledger entries</h2><p>Up to 200 most recent entries.</p></div><div className="data-source">{entries.length} ENTRIES</div></div>
       {entries.length ? entries.map((entry) => <article className={`panel ledger-entry ${entry.status}`} key={entry.id}>
         <div><span className="sales-project-label">{entry.transaction_date} · {entry.project_name ?? "Company-wide"} · {entry.category}</span><h3>{entry.description || entry.category}</h3><span className="ledger-entry-status">{entry.status === "void" ? "Voided · excluded from totals" : entry.source_import_row_id ? "Imported from owner-reviewed CSV" : entry.source_attention_item_id ? "Recorded after Gmail approval" : "Recorded manually"}</span></div>
         <strong className={`ledger-amount ${entry.direction}`}>{entry.direction === "expense" ? "−" : "+"}{money(entry.amount_cents)}</strong>
         <button className="refresh-button ledger-status-action" type="button" disabled={busy || (authRequired && !token)} onClick={() => void setStatus(entry, entry.status === "recorded" ? "void" : "recorded")}>{entry.status === "recorded" ? "Void entry" : "Restore entry"}</button>
-      </article>) : <div className="panel empty-state">No ledger entries yet.</div>}
+      </article>) : loaded ? <div className="panel empty-state">No ledger entries yet.</div> : <div className="panel empty-state">Loading ledger entries…</div>}
     </section>
   </div>;
 }

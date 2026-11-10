@@ -19,6 +19,7 @@ function ageLabel(timestamp: string) {
 
 export function SupportDesk({ authRequired }: { authRequired: boolean }) {
   const [cases, setCases] = useState<SupportCase[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [token, setToken] = useState("");
@@ -34,9 +35,10 @@ export function SupportDesk({ authRequired }: { authRequired: boolean }) {
     setProjects((body.projects ?? []) as Project[]);
     setContacts((body.contacts ?? []) as Contact[]);
     setForm((current) => ({ ...current, project_id: current.project_id || body.projects?.[0]?.id || "" }));
+    setLoaded(true);
   }, [headers]);
 
-  useEffect(() => { void refresh().catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Could not load support cases.")); }, [refresh]);
+  useEffect(() => { void refresh().catch((error: unknown) => { setMessage(error instanceof Error ? error.message : "Could not load support cases."); setLoaded(true); }); }, [refresh]);
   useEffect(() => {
     const timer = window.setInterval(() => { void refresh().catch(() => undefined); }, 15_000);
     return () => window.clearInterval(timer);
@@ -97,7 +99,7 @@ export function SupportDesk({ authRequired }: { authRequired: boolean }) {
         <div className="support-case-heading"><div><span className="sales-project-label">{item.project_name} · {item.priority} · opened {ageLabel(item.created_at)} ago · updated {ageLabel(item.updated_at)} ago</span><h3>{item.title}</h3><p>{item.contact_name ?? "No linked contact"}{item.organization ? ` · ${item.organization}` : ""}</p></div><label className="router-field">Status<select value={item.status} disabled={busy || (authRequired && !token)} onChange={(event) => void updateStatus(item, event.target.value as CaseStatus)}>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div>
         {item.description ? <p className="support-case-description">{item.description}</p> : null}
         <span className="support-task-label">{item.task_id ? `Support task linked · agent run ${item.agent_run_status ?? "not queued"}` : "No active task"}</span>
-      </article>) : <div className="panel empty-state">No support cases yet. Create an internal case to start the Support workflow.</div>}
+      </article>) : loaded ? <div className="panel empty-state">No support cases yet. Create an internal case to start the Support workflow.</div> : <div className="panel empty-state">Loading support cases…</div>}
     </section>
   </div>;
 }
