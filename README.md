@@ -125,6 +125,7 @@ For GitHub, Proxmox, Nextcloud, n8n and Firebase event ingestion, see `docs/inte
 - The AI Workforce page leads with the task console; agent policies live at the bottom. The task board refreshes itself and says when it is showing the first 8 of more open tasks.
 - The ledger, support cases, sales pipeline, and agent run history each have a search box that filters as you type.
 - Codex CLI is the autonomous operator for every role: when an agent proposes a task and the owner approves it — or the owner creates a task for an agent — the execution run is queued automatically and the agent worker carries it out. There is no manual dispatch step; the AI Workforce page is a live view of the queue and history. Roles configured for a manual handoff provider (ChatGPT Free, Claude Free, manual Codex) still wait for the owner to paste the response, since those subscriptions are owner-mediated.
+- The Agency page runs the business like the Lead Desk: pick a business (or all three), see every department's live work and what is waiting for your approval, and keep one brand kit per business. Paste the business website and choose "Read from website" to propose a kit automatically (logo, colors, fonts, phone, Instagram); nothing is saved until you review and save. The saved kit — including the Instagram username the planner publishes through — joins the project context your agents receive.
 - Under the hood, each page loads only the data it renders (per-domain loaders in `lib/data.ts`), and API routes share one error helper (`lib/api-errors.ts`) so every error has the same `{ error }` shape.
 
 ## APIs
@@ -150,6 +151,8 @@ For GitHub, Proxmox, Nextcloud, n8n and Firebase event ingestion, see `docs/inte
 - `GET /api/integrations/google/callback` — complete Google OAuth
 - `GET /api/integrations/wordpress` / `POST /api/integrations/wordpress` — WordPress connection status and publish proposals
 - `GET /api/project-memory` / `PUT /api/project-memory` — owner-managed shared project memory
+- `GET /api/brand-kits` / `PUT /api/brand-kits` — per-business brand kits (owner-reviewed saves)
+- `POST /api/brand-kits/extract` — propose a brand kit by reading a business website (never saves automatically)
 - `GET /api/sales/leads`, `POST /api/sales/leads`, and `PATCH /api/sales/leads` — owner-authenticated sales pipeline
 - `PATCH /api/sales/reminders` — complete or retire sales follow-up reminder tasks
 - `GET /api/onboarding` and `PATCH /api/onboarding` — owner-authenticated onboarding checklist and task status
