@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
-import { databaseAvailable, query } from "@/lib/db";
+import { databaseAvailable, query, transaction } from "@/lib/db";
 import { getTasksData } from "@/lib/data";
+import { queueTaskExecution } from "@/lib/ai/queue-task-run";
 import { normalizeProviderList, normalizeTaskCapabilities, normalizeTaskConstraints } from "@/lib/ai/task-spec";
 
 export const dynamic = "force-dynamic";
@@ -94,6 +95,20 @@ export async function POST(request: Request) {
        VALUES ($1, 'command-center', 'task_created', $2, 'info', $3::jsonb)`,
       [projectResult.rows[0]?.id ?? null, `Task created: ${title}`, JSON.stringify({ task_id: inserted.rows[0].id, priority, capabilities, constraints, preferred_providers: preferredProviders, fallback_providers: fallbackProviders })],
     );
+
+    const assigneeId = agentResult.rows[0]?.id;
+    if (assigneeId) {
+      await transaction(async (client) => {
+        await queueTaskExecution(client, {
+          projectId: projectResult.rows[0]?.id ?? null,
+          agentId: assigneeId,
+          taskId: inserted.rows[0].id,
+          title,
+          priority: priority as "low" | "normal" | "high" | "critical",
+          source: "api_task_created",
+        });
+      });
+    }
 
     return NextResponse.json({ ok: true, task_id: inserted.rows[0].id });
   } catch (error) {

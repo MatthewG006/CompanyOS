@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query, transaction } from "@/lib/db";
+import { queueTaskExecution } from "@/lib/ai/queue-task-run";
 
 export const dynamic = "force-dynamic";
 
@@ -172,6 +173,16 @@ export async function PATCH(request: Request) {
                VALUES ($1,$2,$3,$4)`,
               [onboarding.rows[0].id, task.rows[0].id, index + 1, stepTitle],
             );
+            if (support.rows[0]?.id) {
+              await queueTaskExecution(client, {
+                projectId: lead.project_id,
+                agentId: support.rows[0].id,
+                taskId: task.rows[0].id,
+                title: `Customer onboarding: ${stepTitle}`,
+                priority: "normal",
+                source: "customer_onboarding",
+              });
+            }
           }
           await client.query(`INSERT INTO events (source,event_type,title,severity,project_id,payload)
             VALUES ('customer-onboarding','customer_onboarding_started',$1,'info',$2,$3::jsonb)`, [
