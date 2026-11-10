@@ -1,16 +1,17 @@
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query } from "@/lib/db";
-import { getDashboardData } from "@/lib/data";
+import { getIntegrationsData } from "@/lib/data";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const data = await getDashboardData();
+  const data = await getIntegrationsData();
   return NextResponse.json({ integrations: data.integrations, source: data.source });
 }
 
 export async function PATCH(request: Request) {
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   try {
     const body = await request.json();
     const name = typeof body?.name === "string" ? body.name.trim() : "";
@@ -25,6 +26,6 @@ export async function PATCH(request: Request) {
     if (!result.rowCount) return NextResponse.json({ error: "Integration not found." }, { status: 404 });
     return NextResponse.json({ ok: true, name, status, mode });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid request." }, { status: 400 });
+    return apiErrorFrom(error, "Invalid request.", 400);
   }
 }

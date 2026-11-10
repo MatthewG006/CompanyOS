@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ListSearch, matchesQuery } from "@/components/ListSearch";
 import { AdminTokenField, useAdminToken } from "@/components/AdminToken";
 
 type Project = { id: string; name: string };
@@ -14,6 +15,8 @@ const money = (cents: string | number) => new Intl.NumberFormat("en-US", { style
 
 export function FinanceLedger({ authRequired }: { authRequired: boolean }) {
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [entryQuery, setEntryQuery] = useState("");
+  const filteredEntries = entries.filter((entry) => matchesQuery(entryQuery, entry.description, entry.category, entry.project_name, entry.direction, entry.status));
   const [loaded, setLoaded] = useState(false);
   const [importBatches, setImportBatches] = useState<ImportBatch[]>([]);
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
@@ -141,12 +144,12 @@ export function FinanceLedger({ authRequired }: { authRequired: boolean }) {
       </article>)}</div>
       {!loaded ? <div className="empty-state">Loading imports…</div> : importRows.every((row) => !["pending", "duplicate"].includes(row.status)) ? <div className="empty-state">No imported rows are waiting for review.</div> : null}
     </section>
-    <section className="ledger-list"><div className="section-title-row"><div><h2>Recent ledger entries</h2><p>Up to 200 most recent entries.</p></div><div className="data-source">{entries.length} ENTRIES</div></div>
-      {entries.length ? entries.map((entry) => <article className={`panel ledger-entry ${entry.status}`} key={entry.id}>
+    <section className="ledger-list"><div className="section-title-row"><div><h2>Recent ledger entries</h2><p>Up to 200 most recent entries.</p></div><div className="list-head-tools"><ListSearch value={entryQuery} onChange={setEntryQuery} placeholder="Search entries…" /><div className="data-source">{filteredEntries.length === entries.length ? `${entries.length} ENTRIES` : `${filteredEntries.length} OF ${entries.length} ENTRIES`}</div></div></div>
+      {filteredEntries.length ? filteredEntries.map((entry) => <article className={`panel ledger-entry ${entry.status}`} key={entry.id}>
         <div><span className="sales-project-label">{entry.transaction_date} · {entry.project_name ?? "Company-wide"} · {entry.category}</span><h3>{entry.description || entry.category}</h3><span className="ledger-entry-status">{entry.status === "void" ? "Voided · excluded from totals" : entry.source_import_row_id ? "Imported from owner-reviewed CSV" : entry.source_attention_item_id ? "Recorded after Gmail approval" : "Recorded manually"}</span></div>
         <strong className={`ledger-amount ${entry.direction}`}>{entry.direction === "expense" ? "−" : "+"}{money(entry.amount_cents)}</strong>
         <button className="refresh-button ledger-status-action" type="button" disabled={busy || (authRequired && !token)} onClick={() => void setStatus(entry, entry.status === "recorded" ? "void" : "recorded")}>{entry.status === "recorded" ? "Void entry" : "Restore entry"}</button>
-      </article>) : loaded ? <div className="panel empty-state">No ledger entries yet.</div> : <div className="panel empty-state">Loading ledger entries…</div>}
+      </article>) : entries.length ? <div className="panel empty-state">No ledger entries match your search.</div> : loaded ? <div className="panel empty-state">No ledger entries yet.</div> : <div className="panel empty-state">Loading ledger entries…</div>}
     </section>
   </div>;
 }

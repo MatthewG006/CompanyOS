@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query, transaction } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +42,7 @@ function parseDate(value: unknown) {
 
 export async function GET(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   const result = await query(`SELECT l.id,l.project_id,p.name AS project_name,l.contact_id,c.name AS contact_name,c.email,c.phone,c.organization,
       l.opportunity_title,l.stage,l.estimated_value_cents::text,l.follow_up_at::text,l.notes,l.source_attention_item_id,l.created_at::text,l.updated_at::text,
       email_pref.status AS email_preference,whatsapp_pref.status AS whatsapp_preference,
@@ -56,7 +57,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
 
   try {
     const body = await request.json();
@@ -111,13 +112,13 @@ export async function POST(request: Request) {
     if (!created) return NextResponse.json({ error: "Project not found." }, { status: 404 });
     return NextResponse.json({ ok: true, lead_id: created.id });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not create sales opportunity." }, { status: 400 });
+    return apiErrorFrom(error, "Could not create sales opportunity.", 400);
   }
 }
 
 export async function PATCH(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
 
   try {
     const body = await request.json();
@@ -191,6 +192,6 @@ export async function PATCH(request: Request) {
     if (!updated) return NextResponse.json({ error: "Sales opportunity not found." }, { status: 404 });
     return NextResponse.json({ ok: true, lead_id: updated.id, stage });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not update sales opportunity." }, { status: 400 });
+    return apiErrorFrom(error, "Could not update sales opportunity.", 400);
   }
 }

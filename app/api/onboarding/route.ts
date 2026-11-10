@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query, transaction } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +17,7 @@ function denied() {
 
 export async function GET(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   const result = await query(`SELECT o.id,o.status,o.created_at::text,o.updated_at::text,o.completed_at::text,
       p.name AS project_name,c.name AS customer_name,c.email,c.organization,l.opportunity_title,
       COALESCE(json_agg(json_build_object('id',s.id,'task_id',s.task_id,'title',s.title,'status',s.status,'position',s.position,'agent_name',a.name)
@@ -32,7 +33,7 @@ export async function GET(request: Request) {
 
 export async function PATCH(request: Request) {
   if (!authorized(request)) return denied();
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
 
   try {
     const body = await request.json();
@@ -71,6 +72,6 @@ export async function PATCH(request: Request) {
     if (!updated) return NextResponse.json({ error: "Onboarding step not found." }, { status: 404 });
     return NextResponse.json({ ok: true, ...updated });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not update onboarding step." }, { status: 400 });
+    return apiErrorFrom(error, "Could not update onboarding step.", 400);
   }
 }

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query, transaction } from "@/lib/db";
 import { loadAgentMemory } from "@/lib/ai/memory";
 import { recordAgentProposals } from "@/lib/ai/actions";
@@ -23,12 +24,12 @@ function authorized(request: Request) {
 
 export async function POST(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   try {
     const outboundEmail = await processNextOutboundEmail();
     if (outboundEmail) return NextResponse.json({ worked: true, kind: "outbound_email", outbound_message_id: outboundEmail.id, status: outboundEmail.status });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Outbound email worker failed." }, { status: 500 });
+    return apiErrorFrom(error, "Outbound email worker failed.", 500);
   }
   const codex = await getCodexCliStatus();
   const workerInstanceId = request.headers.get("x-companyos-agent-worker-id");
@@ -44,13 +45,13 @@ export async function POST(request: Request) {
   try {
     handoffsExpired = await transaction((client) => expireStaleHandoffs(client, handoffExpiryHours(process.env.AGENT_HANDOFF_EXPIRY_HOURS)));
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Handoff expiry failed." }, { status: 500 });
+    return apiErrorFrom(error, "Handoff expiry failed.", 500);
   }
   let salesRemindersCreated = 0;
   try {
     salesRemindersCreated = await dispatchDueSalesFollowups();
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Sales reminder dispatch failed." }, { status: 500 });
+    return apiErrorFrom(error, "Sales reminder dispatch failed.", 500);
   }
   // Queued runs have no one to paste a response and must never reach billable APIs: Codex CLI first, then a local model.
   const localCap = await localCapStatus(query, localRunsPerHour(process.env.AGENT_LOCAL_MAX_RUNS_PER_HOUR));
@@ -162,6 +163,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ worked: true, run_id: run.id, status: "failed" });
     }
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Agent worker failed." }, { status: 500 });
+    return apiErrorFrom(error, "Agent worker failed.", 500);
   }
 }

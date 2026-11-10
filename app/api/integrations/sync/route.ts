@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable } from "@/lib/db";
 import { isIntegrationConfigured, syncIntegration } from "@/lib/integrations/sync";
 
@@ -15,7 +16,7 @@ const allowed = new Set(["Gmail", "Google Calendar", "GitHub", "Proxmox", "Nextc
 
 export async function POST(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
   try {
     const body = await request.json().catch(() => ({}));
     const requested = typeof body?.integration === "string" ? body.integration : "all";
@@ -36,6 +37,6 @@ export async function POST(request: Request) {
     }
     return NextResponse.json({ ok: results.every((result) => ["completed", "skipped"].includes(result.status)), results });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid request." }, { status: 400 });
+    return apiErrorFrom(error, "Invalid request.", 400);
   }
 }

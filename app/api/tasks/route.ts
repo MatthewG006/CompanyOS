@@ -1,18 +1,19 @@
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, query } from "@/lib/db";
-import { getDashboardData } from "@/lib/data";
+import { getTasksData } from "@/lib/data";
 import { normalizeProviderList, normalizeTaskCapabilities, normalizeTaskConstraints } from "@/lib/ai/task-spec";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const data = await getDashboardData();
+  const data = await getTasksData();
   return NextResponse.json({ tasks: data.tasks, source: data.source });
 }
 
 export async function PATCH(request: Request) {
   if (!(await databaseAvailable())) {
-    return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+    return databaseUnavailable();
   }
 
   try {
@@ -41,13 +42,13 @@ export async function PATCH(request: Request) {
 
     return NextResponse.json({ ok: true, task: updated.rows[0] });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid request." }, { status: 400 });
+    return apiErrorFrom(error, "Invalid request.", 400);
   }
 }
 
 export async function POST(request: Request) {
   if (!(await databaseAvailable())) {
-    return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+    return databaseUnavailable();
   }
 
   try {
@@ -96,6 +97,6 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true, task_id: inserted.rows[0].id });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid request." }, { status: 400 });
+    return apiErrorFrom(error, "Invalid request.", 400);
   }
 }

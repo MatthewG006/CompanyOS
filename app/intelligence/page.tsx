@@ -2,13 +2,13 @@ import { DemoBanner } from "@/components/DemoBanner";
 import { Topbar } from "@/components/Topbar";
 import { StatusDot } from "@/components/StatusDot";
 import { AttentionList } from "@/components/AttentionList";
-import { getDashboardData } from "@/lib/data";
+import { getIntelligenceData } from "@/lib/data";
 import { WorkflowMonitor } from "./WorkflowMonitor";
 
 export const dynamic = "force-dynamic";
 
 export default async function IntelligencePage() {
-  const data = await getDashboardData();
+  const data = await getIntelligenceData();
   return (
     <div className="page-wrap">
       <DemoBanner source={data.source} />

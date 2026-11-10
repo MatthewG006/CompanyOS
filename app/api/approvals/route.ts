@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, transaction } from "@/lib/db";
-import { getDashboardData } from "@/lib/data";
+import { getApprovalsData } from "@/lib/data";
 import { getAgentTool } from "@/lib/ai/tool-registry";
 
 export const dynamic = "force-dynamic";
@@ -18,14 +19,14 @@ function denied() {
 
 export async function GET(request: Request) {
   if (!authorized(request)) return denied();
-  const data = await getDashboardData();
+  const data = await getApprovalsData();
   return NextResponse.json({ approvals: data.approvals, source: data.source });
 }
 
 export async function PATCH(request: Request) {
   if (!authorized(request)) return denied();
   if (!(await databaseAvailable())) {
-    return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+    return databaseUnavailable();
   }
 
   try {
@@ -80,6 +81,6 @@ export async function PATCH(request: Request) {
     if ("unsupported" in decision) return NextResponse.json({ error: "No registered handler exists for this approval action." }, { status: 409 });
     return NextResponse.json({ ok: true, id, status, ...(decision.actionType === "record_income" ? { financial_transaction_id: decision.affectedEntityId } : decision.actionType === "create_sales_lead" ? { sales_lead_id: decision.affectedEntityId } : decision.actionType === "update_support_case" ? { support_case_id: decision.affectedEntityId } : decision.actionType === "send_email" ? { outbound_message_id: decision.affectedEntityId, delivery_status: "queued" } : { affected_task_id: decision.affectedEntityId }) });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid request." }, { status: 400 });
+    return apiErrorFrom(error, "Invalid request.", 400);
   }
 }

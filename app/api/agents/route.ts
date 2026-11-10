@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, transaction } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,7 @@ function authorized(request: Request) {
 
 export async function PATCH(request: Request) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  if (!(await databaseAvailable())) return NextResponse.json({ error: "Database is unavailable." }, { status: 503 });
+  if (!(await databaseAvailable())) return databaseUnavailable();
 
   try {
     const body = await request.json();
@@ -86,6 +87,6 @@ export async function PATCH(request: Request) {
     if (updated.status !== 200) return NextResponse.json({ error: updated.error }, { status: updated.status });
     return NextResponse.json({ ok: true, ...updated, auth_required: process.env.NODE_ENV !== "production" && Boolean(process.env.COMPANYOS_ADMIN_TOKEN) });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not save agent policy." }, { status: 400 });
+    return apiErrorFrom(error, "Could not save agent policy.", 400);
   }
 }

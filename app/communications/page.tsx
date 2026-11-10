@@ -2,14 +2,14 @@ import { DemoBanner } from "@/components/DemoBanner";
 import { Topbar } from "@/components/Topbar";
 import { IntegrationManager } from "@/components/IntegrationManager";
 import { StatusDot } from "@/components/StatusDot";
-import { getDashboardData } from "@/lib/data";
+import { getCommunicationsData } from "@/lib/data";
 import { googleEmailSendReady } from "@/lib/integrations/google";
 import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 export default async function CommunicationsPage() {
-  const data = await getDashboardData();
+  const data = await getCommunicationsData();
   const gmailRecords = data.external_records.filter((item) => item.record_type === "email");
   const calendarRecords = data.external_records.filter((item) => item.record_type === "calendar_event");
   const sendReady = await googleEmailSendReady();
