@@ -62,15 +62,28 @@ The local CompanyOS app does not reuse a ChatGPT Gmail/Calendar connection. Goog
 
 ## Requirements
 
-- Node.js 20.9+
+- Node.js 24+ (pinned in `engines`, `.nvmrc`, and CI)
 - Docker Desktop for the included PostgreSQL container
 - Git (recommended)
 
 ## Run locally
 
+PowerShell:
+
 ```powershell
 npm install
 Copy-Item .env.example .env.local
+npm run db:up
+npm run db:migrate
+npm run db:seed
+npm run dev
+```
+
+bash (macOS/Linux):
+
+```bash
+npm install
+cp .env.example .env.local
 npm run db:up
 npm run db:migrate
 npm run db:seed
@@ -107,20 +120,32 @@ For GitHub, Proxmox, Nextcloud, n8n and Firebase event ingestion, see `docs/inte
 
 - `GET /api/overview` — complete dashboard payload
 - `GET /api/health` — application/database health
-- `GET /api/tasks` / `POST /api/tasks` — task list and creation
+- `POST /api/auth/login` / `POST /api/auth/logout` — owner session sign-in and sign-out
+- `POST /api/command` — CommandBar natural-language routing (approval-gated proposals)
+- `GET /api/tasks` / `POST /api/tasks` / `PATCH /api/tasks` — task list, creation, and status updates
 - `GET /api/events` — latest events
 - `POST /api/events/ingest` — authenticated operational event ingestion
-- `GET /api/integrations` — integration registry
-- `POST /api/integrations/sync` — authenticated/manual collector execution
-- `GET /api/integrations/google/start` — begin Google OAuth
-- `GET /api/integrations/google/callback` — complete Google OAuth
+- `GET /api/approvals` / `PATCH /api/approvals` — pending approvals and owner decisions
+- `PATCH /api/attention` — dismiss or resolve intelligence attention items
+- `PATCH /api/agents` — agent policy updates
 - `GET /api/agent-runs` / `POST /api/agent-runs` — run history and task routing
 - `POST /api/agent-runs` with `retry_run_id` — retry an eligible failed Codex CLI run once
 - `PATCH /api/agent-runs` — save a response from a manual provider handoff
 - `POST /api/agent-runs/worker` — claim and execute one queued Codex task (admin protected)
 - `GET /api/workflows` — protected Gmail workflow and agent-run status for the Business Intelligence screen
+- `GET /api/integrations` / `PATCH /api/integrations` — integration registry and settings
+- `POST /api/integrations/sync` — authenticated/manual collector execution
+- `GET /api/integrations/google/start` — begin Google OAuth
+- `GET /api/integrations/google/callback` — complete Google OAuth
+- `GET /api/integrations/wordpress` / `POST /api/integrations/wordpress` — WordPress connection status and publish proposals
+- `GET /api/project-memory` / `PUT /api/project-memory` — owner-managed shared project memory
 - `GET /api/sales/leads`, `POST /api/sales/leads`, and `PATCH /api/sales/leads` — owner-authenticated sales pipeline
+- `PATCH /api/sales/reminders` — complete or retire sales follow-up reminder tasks
 - `GET /api/onboarding` and `PATCH /api/onboarding` — owner-authenticated onboarding checklist and task status
+- `GET /api/support`, `POST /api/support`, and `PATCH /api/support` — owner-authenticated Support Desk cases
+- `GET /api/finance/transactions`, `POST /api/finance/transactions`, and `PATCH /api/finance/transactions` — owner-authenticated finance ledger
+- `GET /api/finance/imports`, `POST /api/finance/imports`, `PUT /api/finance/imports`, and `PATCH /api/finance/imports` — staged CSV import review, re-check, and per-row decisions
+- `PATCH /api/communications/preferences` — communication channel preferences (consent and opt-outs)
 
 ## Security
 
