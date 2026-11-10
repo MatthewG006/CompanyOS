@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { AdminTokenField, useAdminToken } from "./AdminToken";
 import type { Approval } from "@/lib/types";
 import { StatusDot } from "./StatusDot";
 
@@ -9,7 +10,7 @@ export function ApprovalList({ initial }: { initial: Approval[] }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState(false);
-  const [adminToken, setAdminToken] = useState("");
+  const { token: adminToken, setToken: setAdminToken } = useAdminToken();
 
   // The Overview polls every 30s and passes fresh approvals in as `initial`.
   // Sync to them so new approvals appear without a manual reload. Skip the
@@ -45,7 +46,7 @@ export function ApprovalList({ initial }: { initial: Approval[] }) {
 
   return (
     <div>
-      {authRequired ? <label className="router-field">Admin token<input type="password" autoComplete="current-password" value={adminToken} onChange={(event) => setAdminToken(event.target.value)} placeholder="Required by COMPANYOS_ADMIN_TOKEN" /></label> : null}
+      {authRequired ? <AdminTokenField /> : null}
       {items.length === 0 ? <div className="empty-state">Nothing is waiting for owner approval.</div> : null}
       <div className="list-stack">
         {items.map((item) => (

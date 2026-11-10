@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { usePolling } from "@/components/usePolling";
+import { AdminTokenField, useAdminToken } from "@/components/AdminToken";
 
 type WorkflowRun = {
   id: string;
@@ -22,7 +24,7 @@ type WorkflowRun = {
 
 export function WorkflowMonitor() {
   const [items, setItems] = useState<WorkflowRun[]>([]);
-  const [adminToken, setAdminToken] = useState("");
+  const { token: adminToken, setToken: setAdminToken } = useAdminToken();
   const [authRequired, setAuthRequired] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
@@ -51,11 +53,15 @@ export function WorkflowMonitor() {
       setError(cause instanceof Error ? cause.message : "Could not load workflow status.");
       setLoaded(true);
     });
-    const timer = window.setInterval(() => {
-      void refresh().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not refresh workflow status."));
-    }, 8000);
-    return () => window.clearInterval(timer);
   }, [refresh]);
+
+  usePolling(async () => {
+    try {
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not refresh workflow status.");
+    }
+  }, 8000);
 
   const failed = items.filter((item) => item.workflow_status === "failed").length;
   const active = items.filter((item) => item.workflow_status === "queued" || item.workflow_status === "running").length;
@@ -65,7 +71,7 @@ export function WorkflowMonitor() {
       <div><h2>Automated workflow runs</h2><p className="muted">Gmail attention routing · latest 50 · refreshes every eight seconds</p></div>
       <button type="button" className="refresh-button" onClick={() => void refresh()}>Refresh</button>
     </div>
-    {authRequired ? <label className="router-field workflow-token">Admin token<input type="password" autoComplete="current-password" value={adminToken} onChange={(event) => setAdminToken(event.target.value)} placeholder="Required by COMPANYOS_ADMIN_TOKEN" /></label> : null}
+    {authRequired ? <AdminTokenField className="workflow-token" /> : null}
     {authRequired ? <p className="queue-note">Run details are protected by the CompanyOS admin token.</p> : null}
     {error ? <p className="run-error" role="alert">{error}</p> : null}
     {loaded && !authRequired && !error ? <div className="workflow-stats"><span>{active} active</span><span>{failed} failed</span><span>{items.length} shown</span></div> : null}

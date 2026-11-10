@@ -116,6 +116,14 @@ For Google OAuth, see `docs/google-oauth.md`.
 
 For GitHub, Proxmox, Nextcloud, n8n and Firebase event ingestion, see `docs/integrations.md`.
 
+## Everyday use
+
+- The Company Brain command bar sits at the top of every page — press **⌘K** (Ctrl+K on Windows/Linux) to jump to it from anywhere.
+- The sidebar highlights the page you are on, and the Sky Mountain brand returns to the Overview.
+- When an admin token is required, enter it once: it is shared by every panel for the rest of the tab session (kept in `sessionStorage` only) instead of being re-typed per screen.
+- Live panels (Overview, Support, Workflows, AI Workforce) pause their auto-refresh while the tab is hidden and refresh as soon as you return, so the numbers are never stale on sight.
+- The AI Workforce page leads with the task console; agent policies live at the bottom. The task board refreshes itself and says when it is showing the first 8 of more open tasks.
+
 ## APIs
 
 - `GET /api/overview` — complete dashboard payload

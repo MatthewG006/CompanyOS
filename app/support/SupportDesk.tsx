@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { usePolling } from "@/components/usePolling";
+import { AdminTokenField, useAdminToken } from "@/components/AdminToken";
 
 type Project = { id: string; name: string };
 type Contact = { id: string; name: string | null; organization: string | null; project_id: string | null };
@@ -22,7 +24,7 @@ export function SupportDesk({ authRequired }: { authRequired: boolean }) {
   const [loaded, setLoaded] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
-  const [token, setToken] = useState("");
+  const { token, setToken } = useAdminToken();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [form, setForm] = useState({ project_id: "", contact_id: "", title: "", description: "", priority: "normal" });
@@ -39,10 +41,7 @@ export function SupportDesk({ authRequired }: { authRequired: boolean }) {
   }, [headers]);
 
   useEffect(() => { void refresh().catch((error: unknown) => { setMessage(error instanceof Error ? error.message : "Could not load support cases."); setLoaded(true); }); }, [refresh]);
-  useEffect(() => {
-    const timer = window.setInterval(() => { void refresh().catch(() => undefined); }, 15_000);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+  usePolling(refresh, 15_000);
 
   async function createCase(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -79,7 +78,7 @@ export function SupportDesk({ authRequired }: { authRequired: boolean }) {
   const waitingCases = activeCases.filter((item) => item.status === "waiting");
   const oldestActiveCase = activeCases.reduce<SupportCase | null>((oldest, item) => !oldest || new Date(item.created_at).getTime() < new Date(oldest.created_at).getTime() ? item : oldest, null);
   return <div className="support-workspace">
-    {authRequired ? <label className="router-field policy-token">Admin token<input type="password" autoComplete="current-password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Required by COMPANYOS_ADMIN_TOKEN" /></label> : null}
+    {authRequired ? <AdminTokenField className="policy-token" /> : null}
     <p className="onboarding-boundary">Cases create internal Support tasks. Case details enter agent context only when you enable the Support memory scope; CompanyOS does not reply to customers or change account settings.</p>
     <div className="support-summary"><div><span>Active cases</span><strong>{activeCases.length}</strong></div><div><span>High priority</span><strong>{highPriorityCases.length}</strong></div><div><span>Waiting</span><strong>{waitingCases.length}</strong></div><div><span>Oldest active</span><strong>{oldestActiveCase ? ageLabel(oldestActiveCase.created_at) : "—"}</strong><small>{oldestActiveCase?.title ?? "No active cases"}</small></div></div>
     {message ? <p className="inline-message" role="status">{message}</p> : null}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AdminTokenField, useAdminToken } from "@/components/AdminToken";
 
 type Project = { id: string; name: string };
 type Stage = "new" | "qualified" | "proposal" | "won" | "lost";
@@ -55,7 +56,7 @@ export function SalesPipeline({ projects, authRequired }: { projects: Project[];
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, LeadDraft>>({});
-  const [token, setToken] = useState("");
+  const { token, setToken } = useAdminToken();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [consentEvidence, setConsentEvidence] = useState<Record<string, string>>({});
@@ -158,7 +159,7 @@ export function SalesPipeline({ projects, authRequired }: { projects: Project[];
   }
 
   return <div className="sales-workspace">
-    {authRequired ? <label className="router-field policy-token">Admin token<input type="password" autoComplete="current-password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Required by COMPANYOS_ADMIN_TOKEN" /></label> : null}
+    {authRequired ? <AdminTokenField className="policy-token" /> : null}
     <div className="sales-summary">
       <div><span>Open pipeline</span><strong>{money(String(totals.pipelineCents))}</strong></div>
       <div><span>Won</span><strong>{money(String(totals.wonCents))}</strong></div>

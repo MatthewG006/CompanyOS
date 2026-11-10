@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { AdminTokenField, useAdminToken } from "@/components/AdminToken";
 import type { Agent } from "@/lib/types";
 
 type Action = "request_task_creation" | "request_task_status_change" | "request_task_delegation" | "request_financial_entry" | "request_sales_lead" | "request_email_outreach" | "request_support_case_update";
@@ -46,7 +47,7 @@ function initialPolicies(agents: Agent[]) {
 
 export function AgentPolicyEditor({ agents, source, authRequired, writesDisabled }: { agents: Agent[]; source: "database" | "demo"; authRequired: boolean; writesDisabled: boolean }) {
   const [policies, setPolicies] = useState<Record<string, Policy>>(() => initialPolicies(agents));
-  const [adminToken, setAdminToken] = useState("");
+  const { token: adminToken, setToken: setAdminToken } = useAdminToken();
   const [savingAgent, setSavingAgent] = useState("");
   const [messages, setMessages] = useState<Record<string, string>>({});
 
@@ -88,7 +89,7 @@ export function AgentPolicyEditor({ agents, source, authRequired, writesDisabled
 
   return <section className="panel agent-policy-panel">
     <div className="panel-head"><div><h2>Agent permissions & memory</h2><p className="muted">Configure execution provider, proposal permissions, and memory scopes. Task proposals still require owner approval.</p></div><span className="data-source">OWNER CONTROL</span></div>
-    {authRequired ? <label className="router-field policy-token">Admin token<input type="password" autoComplete="current-password" value={adminToken} onChange={(event) => setAdminToken(event.target.value)} placeholder="Required by COMPANYOS_ADMIN_TOKEN" /></label> : null}
+    {authRequired ? <AdminTokenField className="policy-token" /> : null}
     {source === "demo" ? <p className="queue-note">Connect PostgreSQL to manage agent policy.</p> : writesDisabled ? <p className="queue-note">Configure COMPANYOS_ADMIN_TOKEN before enabling policy changes in production.</p> : null}
     <div className="policy-list">{agents.map((agent) => {
       const policy = policies[agent.id];

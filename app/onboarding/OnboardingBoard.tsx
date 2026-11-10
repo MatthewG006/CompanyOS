@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { AdminTokenField, useAdminToken } from "@/components/AdminToken";
 
 type Step = { id: string; task_id: string | null; title: string; status: "todo" | "in_progress" | "blocked" | "done"; position: number; agent_name: string | null };
 type Onboarding = { id: string; status: "in_progress" | "completed"; created_at: string; completed_at: string | null; project_name: string; customer_name: string | null; email: string | null; organization: string | null; opportunity_title: string; steps: Step[] };
@@ -10,7 +11,7 @@ const statusLabels: Record<Step["status"], string> = { todo: "To do", in_progres
 export function OnboardingBoard({ authRequired }: { authRequired: boolean }) {
   const [items, setItems] = useState<Onboarding[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [token, setToken] = useState("");
+  const { token, setToken } = useAdminToken();
   const [busyStep, setBusyStep] = useState("");
   const [message, setMessage] = useState("");
 
@@ -43,7 +44,7 @@ export function OnboardingBoard({ authRequired }: { authRequired: boolean }) {
   }
 
   return <div className="onboarding-workspace">
-    {authRequired ? <label className="router-field policy-token">Admin token<input type="password" autoComplete="current-password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Required by COMPANYOS_ADMIN_TOKEN" /></label> : null}
+    {authRequired ? <AdminTokenField className="policy-token" /> : null}
     <p className="onboarding-boundary">This checklist creates internal tasks only. CompanyOS does not email customers, provision accounts, or change service settings from this workflow.</p>
     {message ? <p className="inline-message" role="status">{message}</p> : null}
     {items.length ? <div className="onboarding-list">{items.map((item) => {

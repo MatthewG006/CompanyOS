@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { AdminTokenField, useAdminToken } from "@/components/AdminToken";
 
 type Project = { id: string; name: string };
 type Memory = { project_id: string; project_name: string; title: string | null; content: string | null; updated_at: string | null };
@@ -10,7 +11,7 @@ export function ProjectMemoryEditor({ projects, authRequired }: { projects: Proj
   const [loaded, setLoaded] = useState(false);
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [contents, setContents] = useState<Record<string, string>>({});
-  const [adminToken, setAdminToken] = useState("");
+  const { token: adminToken, setToken: setAdminToken } = useAdminToken();
   const [savingProject, setSavingProject] = useState("");
   const [message, setMessage] = useState("");
 
@@ -56,7 +57,7 @@ export function ProjectMemoryEditor({ projects, authRequired }: { projects: Proj
 
   return <section className="panel project-memory-panel">
     <div className="panel-head"><div><h2>Shared project memory</h2><p className="muted">Owner notes are included only for agents with the project memory scope. Keep secrets and personal email details out of these notes.</p></div><span className="data-source">OWNER CONTROL</span></div>
-    {authRequired ? <label className="router-field policy-token">Admin token<input type="password" autoComplete="current-password" value={adminToken} onChange={(event) => setAdminToken(event.target.value)} placeholder="Required by COMPANYOS_ADMIN_TOKEN" /></label> : null}
+    {authRequired ? <AdminTokenField className="policy-token" /> : null}
     {message ? <p className="inline-message" role="status">{message}</p> : null}
     <div className="project-memory-list">{projects.map((project) => {
       const record = memories.find((memory) => memory.project_id === project.id);
