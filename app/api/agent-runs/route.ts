@@ -10,6 +10,7 @@ import { DispatchError, executeWithFallback, planDispatch } from "@/lib/ai/dispa
 import { capNotice, localCapStatus, localRunsPerHour } from "@/lib/ai/local-cap";
 import { normalizeProviderList, normalizeTaskCapabilities, normalizeTaskConstraints, type TaskSpec } from "@/lib/ai/task-spec";
 import { workerReportsCodexAvailable } from "@/lib/ai/worker-status";
+import { createFailedRunRetry } from "@/lib/ai/failed-run-retry";
 
 export const dynamic = "force-dynamic";
 
@@ -45,78 +46,9 @@ export async function GET(request: Request) {
   return NextResponse.json({ runs: runs.rows, run_counts, local_cap, providers: { ...configuredProviders(), "codex-cli": isCodexAvailable }, provider_status: { "codex-cli": { ...codex_cli, authenticated: isCodexAvailable } }, agent_worker: worker, auth_required: process.env.NODE_ENV !== "production" && Boolean(process.env.COMPANYOS_ADMIN_TOKEN) });
 }
 
-type RetryOutcome =
-  | { ok: true; run_id: string; status: string; already_retried: boolean }
-  | { ok: false; error: string; statusCode: number };
-
-async function queueFailedCodexRetry(runId: string): Promise<RetryOutcome> {
-  return transaction(async (client) => {
-    const sourceResult = await client.query<{
-      id: string;
-      task_id: string | null;
-      agent_id: string | null;
-      provider: string;
-      status: string;
-      summary: string | null;
-      error: string | null;
-      input: Record<string, unknown> | null;
-      task_status: string | null;
-    }>(`SELECT r.id,r.task_id,r.agent_id,r.provider,r.status,r.summary,r.error,r.input,t.status AS task_status
-      FROM agent_runs r LEFT JOIN tasks t ON t.id=r.task_id WHERE r.id=$1 FOR UPDATE OF r`, [runId]);
-    const source = sourceResult.rows[0];
-    if (!source) return { ok: false, error: "Agent run not found.", statusCode: 404 };
-    if (source.provider !== "codex-cli" && source.provider !== "ollama" && source.provider !== "auto") return { ok: false, error: "Only failed automated runs (Codex CLI, Ollama, auto) can be retried in the queue.", statusCode: 400 };
-    if (source.status !== "failed") return { ok: false, error: "Only failed runs can be retried.", statusCode: 409 };
-    if (!source.task_id || !source.agent_id || !source.task_status || source.task_status === "done") {
-      return { ok: false, error: "The failed run's task is missing, complete, or unassigned.", statusCode: 409 };
-    }
-
-    const priorRetry = await client.query<{ id: string; status: string }>(
-      "SELECT id,status FROM agent_runs WHERE retry_of_run_id=$1 LIMIT 1",
-      [source.id],
-    );
-    if (priorRetry.rows[0]) {
-      return { ok: true, run_id: priorRetry.rows[0].id, status: priorRetry.rows[0].status, already_retried: true };
-    }
-
-    const originalInput = source.input && typeof source.input === "object" && !Array.isArray(source.input)
-      ? source.input
-      : {};
-    const retryInput = {
-      source: "failed-run-retry",
-      workflow_context: originalInput.workflow_context,
-      retry_context: {
-        previous_run_id: source.id,
-        previous_error: source.error?.slice(0, 400) ?? null,
-        previous_summary: source.summary?.slice(0, 400) ?? null,
-      },
-    };
-    const inserted = await client.query<{ id: string; status: string }>(
-      `INSERT INTO agent_runs (agent_id,task_id,provider,status,summary,input,retry_of_run_id)
-       VALUES ($1,$2,$5,'queued','Queued retry after failed agent run.',$3::jsonb,$4)
-       ON CONFLICT (retry_of_run_id) WHERE retry_of_run_id IS NOT NULL DO NOTHING
-       RETURNING id,status`,
-      [source.agent_id, source.task_id, JSON.stringify(retryInput), source.id, source.provider],
-    );
-    const retry = inserted.rows[0];
-    if (!retry) {
-      const concurrentRetry = await client.query<{ id: string; status: string }>(
-        "SELECT id,status FROM agent_runs WHERE retry_of_run_id=$1 LIMIT 1",
-        [source.id],
-      );
-      const existing = concurrentRetry.rows[0];
-      if (!existing) throw new Error("Could not save the retry run.");
-      return { ok: true, run_id: existing.id, status: existing.status, already_retried: true };
-    }
-
-    await client.query(
-      `INSERT INTO events (source,event_type,title,severity,payload)
-       VALUES ('agent-router','agent_run_retried','Failed agent run queued for retry','info',$1::jsonb)`,
-      [JSON.stringify({ previous_run_id: source.id, retry_run_id: retry.id, task_id: source.task_id })],
-    );
-    await client.query("UPDATE workflow_dispatches SET agent_run_id=$2,status='queued' WHERE agent_run_id=$1", [source.id, retry.id]);
-    return { ok: true, run_id: retry.id, status: retry.status, already_retried: false };
-  });
+/** Manual-retry entry point: the shared retry creator in its own transaction. */
+async function queueFailedCodexRetry(runId: string) {
+  return transaction((client) => createFailedRunRetry(client, runId));
 }
 
 export async function POST(request: Request) {

@@ -227,6 +227,7 @@ if (useDatabaseMode) {
       const claimResult = await client.query(
         `WITH candidate AS (
            SELECT id FROM agent_runs WHERE status='queued' AND provider IN ('codex-cli', 'auto', 'agnostic')
+             AND (available_at IS NULL OR available_at <= NOW())
            ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
          )
          UPDATE agent_runs r SET status='running',summary='Worker running on VM.',started_at=NOW(),error=NULL
