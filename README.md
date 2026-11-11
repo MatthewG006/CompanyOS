@@ -138,6 +138,7 @@ For GitHub, Proxmox, Nextcloud, n8n and Firebase event ingestion, see `docs/inte
 - `GET /api/health` — application/database health
 - `POST /api/auth/login` / `POST /api/auth/logout` — owner session sign-in and sign-out
 - `POST /api/command` — CommandBar natural-language routing (approval-gated proposals)
+- `POST /api/ask` — Ask CompanyOS: proxies a question to the RAG knowledge service (RAG_API_URL / RAG_SERVICE_TOKEN) and returns the answer with citations
 - `GET /api/tasks` / `POST /api/tasks` / `PATCH /api/tasks` — task list, creation, and status updates
 - `GET /api/events` — latest events
 - `POST /api/events/ingest` — authenticated operational event ingestion

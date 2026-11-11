@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePolling } from "./usePolling";
 import type { DashboardData } from "@/lib/types";
 import { ApprovalList } from "./ApprovalList";
+import { AskCompanyOS } from "./AskCompanyOS";
 import { DemoBanner } from "./DemoBanner";
 import { MetricCard } from "./MetricCard";
 import { ProjectCard } from "./ProjectCard";
@@ -80,6 +81,8 @@ export function LiveOverview({ initial }: { initial: DashboardData }) {
       <MetricCard label="Open tasks" value={String(openTasks)} detail="Across all projects" />
       <MetricCard label="Needs attention" value={String(attentionItems)} detail={`${data.approvals.length} owner approval${data.approvals.length === 1 ? "" : "s"}`} />
     </section>
+
+    <AskCompanyOS />
 
     <section className="section-block">
       <div className="section-title-row"><div><h2>Connected data</h2><p>Normalized external records currently cached by CompanyOS.</p></div><div className="data-source">{data.external_summary.total} RECORDS</div></div>
