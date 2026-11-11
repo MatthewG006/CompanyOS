@@ -43,6 +43,19 @@ test("the owner-supplied logo ships and is used in the sidebar and login", () =>
   assert.match(login, /src="\/brand-logo\.png"/, "login card must show the brand logo");
 });
 
+test("the auth proxy lets the login page load the brand logo unauthenticated", () => {
+  const proxy = read("proxy.ts");
+  // The login card renders /brand-logo.png before sign-in; if the proxy
+  // matcher lets the owner-auth check intercept that request, it redirects
+  // to /login and the browser receives HTML instead of the PNG, so the
+  // logo can never display on the sign-in page.
+  assert.match(
+    proxy,
+    /matcher: \["\/\(\(\?!_next\/static\|_next\/image\|favicon\.ico\|brand-logo\.png\|/,
+    "proxy matcher must exclude brand-logo.png, like favicon.ico",
+  );
+});
+
 test("the layout declares a mobile viewport with the brand theme color", () => {
   const layout = read("app/layout.tsx");
   assert.match(layout, /export const viewport/, "layout must export a viewport");
