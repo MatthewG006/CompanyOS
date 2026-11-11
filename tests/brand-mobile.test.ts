@@ -67,6 +67,14 @@ test("the sidebar keeps the deep teal ring while the main area is light", () => 
   assert.match(styles, /\.agency-switch-btn\.active \{ background: var\(--brand\);/, "the active business switcher must fill with brand teal, not the white panel color");
 });
 
+test("mobile overflow guards: grid items and wrappers can always shrink", () => {
+  const styles = css();
+  assert.match(styles, /\.sidebar \{ min-width: 0;/, "the sidebar grid item must allow shrinking or the nowrap nav row stretches the mobile column");
+  assert.ok(styles.includes("flex: 1 1 100%; min-width: 0; max-width: 100%;"), "the mobile nav row must be shrinkable and capped at the column width");
+  assert.match(styles, /\.page-wrap \{ max-width: 1500px; min-width: 0;/, "page-wrap must allow shrinking");
+  assert.match(styles, /\.command-region \{ max-width: 1500px; min-width: 0;/, "command region must allow shrinking");
+});
+
 test("the demo brand kit for Sky Mountain Graphics carries the real logo colors", () => {
   const data = read("lib/data.ts");
   assert.match(data, /"#4196b3", "#54c9ea", "#ffffff"/, "Graphics demo kit must use the sampled logo palette");
