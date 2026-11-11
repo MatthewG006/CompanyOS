@@ -119,6 +119,7 @@ For GitHub, Proxmox, Nextcloud, n8n and Firebase event ingestion, see `docs/inte
 
 ## Everyday use
 
+- The dashboard wears the Sky Mountain Graphics brand: the palette is sampled from the logo (deep teal `#4196b3`, sky blue `#54c9ea`), the main background is white with deep-teal ink text — framed by the deep teal sidebar, like the logo's ring around its white center — and the logo itself sits in the sidebar and on the sign-in card. It is built mobile-first for phones: below desktop width the sidebar becomes a top bar with the navigation on its own full-width scrollable row, tap targets are at least 44px, and multi-column rows collapse instead of squeezing.
 - The Company Brain command bar sits at the top of every page — press **⌘K** (Ctrl+K on Windows/Linux) to jump to it from anywhere.
 - The sidebar highlights the page you are on, and the Sky Mountain brand returns to the Overview.
 - When an admin token is required, enter it once: it is shared by every panel for the rest of the tab session (kept in `sessionStorage` only) instead of being re-typed per screen.

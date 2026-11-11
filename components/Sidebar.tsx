@@ -24,7 +24,8 @@ export function Sidebar({ ownerAuthEnabled = false }: { ownerAuthEnabled?: boole
   const pathname = usePathname();
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`));
   return <aside className="sidebar">
-    <Link href="/" className="brand-block brand-link" aria-label="Sky Mountain CompanyOS — go to Overview"><div className="brand-mark">SM</div><div><div className="brand-name">Sky Mountain</div><div className="brand-sub">CompanyOS</div></div></Link>
+    <Link href="/" className="brand-block brand-link" aria-label="Sky Mountain CompanyOS — go to Overview">{/* biome-ignore lint/performance/noImgElement: static brand logo from /public, no optimization needed */}
+      <img className="brand-logo" src="/brand-logo.png" alt="" width={38} height={38} /><div><div className="brand-name">Sky Mountain</div><div className="brand-sub">CompanyOS</div></div></Link>
     <nav>{links.map(([label, href]) => {
       const active = isActive(href);
       return <Link key={href} href={href} className={active ? "nav-link active" : "nav-link"} aria-current={active ? "page" : undefined}>{label}</Link>;
