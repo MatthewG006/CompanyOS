@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 type Citation = {
   source: string;
@@ -9,6 +9,34 @@ type Citation = {
   chunk_index: number;
   score: number;
 };
+
+// The knowledge service generates answers on a local CPU model, which can
+// take a minute or two. Asks therefore run as background jobs: POST starts
+// one, then this panel polls until the answer is ready — no single request
+// is held open long enough for a proxy to cut it off.
+const POLL_INTERVAL_MS = 3000;
+const POLL_DEADLINE_MS = 6 * 60 * 1000;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function pollForAnswer(jobId: string): Promise<{ answer: string; citations: Citation[] }> {
+  const deadline = Date.now() + POLL_DEADLINE_MS;
+  while (Date.now() < deadline) {
+    await sleep(POLL_INTERVAL_MS);
+    const result = await fetch(`/api/ask?jobId=${encodeURIComponent(jobId)}`);
+    const data = await result.json();
+    if (!result.ok) {
+      throw new Error(data.error ?? "Ask CompanyOS is not available right now.");
+    }
+    if (data.status === "done") {
+      return {
+        answer: typeof data.answer === "string" ? data.answer : "",
+        citations: Array.isArray(data.citations) ? data.citations : [],
+      };
+    }
+  }
+  throw new Error("Still thinking — the service is unusually slow right now. Try again in a moment.");
+}
 
 /**
  * Ask CompanyOS: questions answered by the RAG knowledge service from
@@ -22,6 +50,14 @@ export function AskCompanyOS() {
   const [citations, setCitations] = useState<Citation[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!busy) return;
+    setElapsed(0);
+    const timer = setInterval(() => setElapsed((seconds) => seconds + 1), 1000);
+    return () => clearInterval(timer);
+  }, [busy]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -31,21 +67,22 @@ export function AskCompanyOS() {
     setCitations([]);
     setNotice(null);
     try {
-      const result = await fetch("/api/ask", {
+      const started = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question }),
       });
-      const data = await result.json();
-      if (!result.ok) {
-        setNotice(data.error ?? "Ask CompanyOS is not available right now.");
+      const startData = await started.json();
+      if (!started.ok) {
+        setNotice(startData.error ?? "Ask CompanyOS is not available right now.");
         return;
       }
-      setAnswer(typeof data.answer === "string" ? data.answer : "");
-      setCitations(Array.isArray(data.citations) ? data.citations : []);
+      const result = await pollForAnswer(String(startData.jobId ?? ""));
+      setAnswer(result.answer);
+      setCitations(result.citations);
       setQuestion("");
-    } catch {
-      setNotice("Ask CompanyOS is not available right now.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Ask CompanyOS is not available right now.");
     } finally {
       setBusy(false);
     }
@@ -68,10 +105,15 @@ export function AskCompanyOS() {
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             placeholder="Ask anything… e.g. 'What services does Sky Mountain Graphics offer?'"
+            disabled={busy}
           />
           <button type="submit" disabled={busy}>{busy ? "Thinking…" : "Ask"}</button>
         </form>
-        {busy ? <div className="muted" style={{ marginTop: 8 }}>The local model can take a minute to answer.</div> : null}
+        {busy ? (
+          <div className="muted" style={{ marginTop: 8 }}>
+            Thinking… {elapsed}s — the local model can take a minute or two; this panel keeps checking until the answer is ready.
+          </div>
+        ) : null}
         {notice ? <div className="command-response">{notice}</div> : null}
         {answer ? <div className="command-response" style={{ whiteSpace: "pre-wrap" }}>{answer}</div> : null}
         {citations.length ? (
