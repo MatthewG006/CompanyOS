@@ -29,6 +29,8 @@ export async function GET(request: Request) {
       username: credentials.username,
       healthy: health.healthy,
       message: health.message,
+      roles: health.roles ?? [],
+      is_admin: health.isAdmin ?? false,
     });
   } catch (error) {
     return apiErrorFrom(error, "Could not retrieve WordPress configuration.", 500);

@@ -387,6 +387,15 @@ WHERE LOWER(name)='sales' AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'requ
 UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_wordpress_publish"]'::jsonb
 WHERE LOWER(name) IN ('engineer', 'designer', 'graphics', 'marketing') AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_wordpress_publish');
 
+-- Allow the same website agents to propose full WordPress site management
+-- (WordPress full-access pack): pages, media uploads, menus, and the
+-- rebuild-critical site settings. This is a separate permission from
+-- request_wordpress_publish on purpose — settings and structure changes
+-- carry a higher blast radius than a draft post, so the owner grants
+-- rebuild capability deliberately. Every action still needs approval.
+UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_wordpress_manage"]'::jsonb
+WHERE LOWER(name) IN ('engineer', 'designer', 'graphics', 'marketing') AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_wordpress_manage');
+
 -- Allow Marketing to propose content planner items (Lead Desk Phase 2)
 UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_content_item"]'::jsonb
 WHERE LOWER(name)='marketing' AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_content_item');

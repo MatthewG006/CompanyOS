@@ -304,6 +304,91 @@ if (useDatabaseMode) {
                     );
                     proposalCount += 1;
                   }
+                  // Mirror the WordPress full-access tools in
+                  // lib/ai/tool-registry.ts (publish_wordpress_page,
+                  // upload_wordpress_media, update_wordpress_settings,
+                  // update_wordpress_menu): only agents that hold
+                  // request_wordpress_manage may propose site management,
+                  // the run must be project-scoped, and fields are bounded
+                  // the same way before anything reaches approvals. Payload
+                  // shapes and approval labels match the registry exactly
+                  // so an approved row executes identically in both modes.
+                  const canManageWordPress = Array.isArray(task.agent_allowed_actions) && task.agent_allowed_actions.includes("request_wordpress_manage");
+                  if (canManageWordPress && task.project_id) {
+                    const wpInt = (value, min, max) => {
+                      const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+                      return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : undefined;
+                    };
+                    const wpSlug = (value) => {
+                      const slug = boundedText(value, 200).toLowerCase();
+                      return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) ? slug : "";
+                    };
+                    const wpHttpUrl = (value) => {
+                      try {
+                        const parsed = new URL(value);
+                        return parsed.protocol === "http:" || parsed.protocol === "https:";
+                      } catch {
+                        return false;
+                      }
+                    };
+                    const insertWpApproval = async (idx, actionType, actionLabel, reason, payload) => {
+                      await pool.query(
+                        `INSERT INTO approvals (project_id,requested_by,action,risk_level,reason,agent_run_id,agent_id,action_type,proposal_index,payload)
+                         VALUES ($1,$2,$3,'high',$4,$5,$6,$7,$8,$9::jsonb)
+                         ON CONFLICT (agent_run_id,proposal_index) WHERE agent_run_id IS NOT NULL AND proposal_index IS NOT NULL DO NOTHING`,
+                        [task.project_id, task.agent_name ?? "Agent", actionLabel, reason, claimed.id, task.agent_id, actionType, idx, JSON.stringify(payload)],
+                      );
+                      proposalCount += 1;
+                    };
+                    for (const [idx, prop] of parsed.proposed_actions.slice(0, 5).entries()) {
+                      const reason = boundedText(prop?.reason, 500);
+                      if (!reason) continue;
+                      if (prop?.type === "publish_wordpress_page") {
+                        const title = boundedText(prop.title, 200);
+                        const content = typeof prop.content === "string" ? prop.content.trim().slice(0, 50_000) : "";
+                        const pageId = wpInt(prop.page_id, 1, 2_147_483_647);
+                        const slug = wpSlug(prop.slug);
+                        const status = prop.status === "publish" ? "publish" : "draft";
+                        if (!content || !(title || pageId)) continue;
+                        const label = pageId
+                          ? `Update WordPress page #${pageId} (${status === "publish" ? "LIVE" : "draft"}): ${title}`
+                          : `Publish WordPress page ${status === "publish" ? "LIVE" : "draft"}: ${title}`;
+                        await insertWpApproval(idx, "publish_wordpress_page", label, reason, { page_id: pageId ?? null, slug, title, content, status });
+                      } else if (prop?.type === "upload_wordpress_media") {
+                        const sourceUrl = boundedText(prop.source_url, 1000);
+                        const title = boundedText(prop.title, 200);
+                        const altText = boundedText(prop.alt_text, 300);
+                        if (!sourceUrl || !wpHttpUrl(sourceUrl)) continue;
+                        await insertWpApproval(idx, "upload_wordpress_media", `Upload media to WordPress: ${title || sourceUrl}`, reason, { source_url: sourceUrl, title, alt_text: altText });
+                      } else if (prop?.type === "update_wordpress_settings") {
+                        const payload = {};
+                        const parts = [];
+                        if (typeof prop.title === "string") { payload.title = boundedText(prop.title, 200); parts.push(`site title → "${payload.title}"`); }
+                        if (typeof prop.description === "string") { payload.description = boundedText(prop.description, 300); parts.push(`tagline → "${payload.description}"`); }
+                        if (prop.show_on_front === "page" || prop.show_on_front === "posts") { payload.show_on_front = prop.show_on_front; parts.push(`homepage shows → ${prop.show_on_front === "page" ? "a static page" : "latest posts"}`); }
+                        const pageOnFront = wpInt(prop.page_on_front, 1, 2_147_483_647);
+                        if (pageOnFront !== undefined) { payload.page_on_front = pageOnFront; parts.push(`homepage page → #${pageOnFront}`); }
+                        if (!parts.length) continue;
+                        await insertWpApproval(idx, "update_wordpress_settings", `Update WordPress site settings: ${parts.join("; ")}`, reason, payload);
+                      } else if (prop?.type === "update_wordpress_menu") {
+                        const menuId = wpInt(prop.menu_id, 1, 2_147_483_647);
+                        const items = [];
+                        let itemsValid = Array.isArray(prop.items) && prop.items.length > 0;
+                        if (itemsValid) {
+                          for (const [itemIndex, entry] of prop.items.slice(0, 30).entries()) {
+                            const title = boundedText(entry?.title, 100);
+                            const url = boundedText(entry?.url, 500);
+                            const parentIndex = wpInt(entry?.parent_index, 0, 29);
+                            if (!title || !url || !wpHttpUrl(url) || (parentIndex !== undefined && parentIndex >= itemIndex)) { itemsValid = false; break; }
+                            items.push({ title, url, ...(parentIndex !== undefined ? { parent_index: parentIndex } : {}) });
+                          }
+                        }
+                        if (!menuId || !itemsValid || !items.length) continue;
+                        const titles = items.map((item) => item.title).join(", ");
+                        await insertWpApproval(idx, "update_wordpress_menu", `Replace WordPress menu #${menuId} items (${items.length}): ${titles.slice(0, 160)}`, reason, { menu_id: menuId, items });
+                      }
+                    }
+                  }
                   // Mirror createContentItemTool in lib/ai/tool-registry.ts:
                   // only agents that hold request_content_item may propose
                   // planner content, the run must be project-scoped, and

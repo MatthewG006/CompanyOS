@@ -64,6 +64,7 @@ for (const row of agents) {
     ...(row[0] === "Finance" ? ["request_financial_entry"] : []),
     ...(row[0] === "Sales" ? ["request_sales_lead"] : []),
     ...(["Engineer", "Designer", "Graphics", "Marketing"].includes(row[0]) ? ["request_wordpress_publish"] : []),
+    ...(["Engineer", "Designer", "Graphics", "Marketing"].includes(row[0]) ? ["request_wordpress_manage"] : []),
     ...(row[0] === "Marketing" ? ["request_content_item"] : []),
   ];
   const result = await client.query(
