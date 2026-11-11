@@ -23,7 +23,7 @@ a { color: inherit; text-decoration: none; }
 button, input { font: inherit; }
 
 .app-shell { min-height: 100vh; display: grid; grid-template-columns: 245px 1fr; }
-.sidebar { border-right: 1px solid var(--border); background: rgba(5, 22, 28, .94); color: #f2f9fc; --text: #f4f7fb; --muted: #a8c6d2; --panel: #0d2731; --panel-2: #123744; --border: #1e4657; padding: 24px 18px; display: flex; flex-direction: column; gap: 28px; }
+.sidebar { min-width: 0; border-right: 1px solid var(--border); background: rgba(5, 22, 28, .94); color: #f2f9fc; --text: #f4f7fb; --muted: #a8c6d2; --panel: #0d2731; --panel-2: #123744; --border: #1e4657; padding: 24px 18px; display: flex; flex-direction: column; gap: 28px; }
 .brand-block { display: flex; align-items: center; gap: 12px; }
 .brand-mark { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; background: linear-gradient(135deg, #4196b3, #54c9ea); font-weight: 800; }
 .brand-name { font-weight: 800; font-size: 15px; }
@@ -36,7 +36,7 @@ button, input { font: inherit; }
 .system-note { color: var(--muted); font-size: 11px; margin-top: 8px; line-height: 1.5; }
 
 .main-area { min-width: 0; }
-.page-wrap { max-width: 1500px; margin: 0 auto; padding: 30px; }
+.page-wrap { max-width: 1500px; min-width: 0; margin: 0 auto; padding: 30px; }
 .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
 .eyebrow { color: #4196b3; font-size: 11px; letter-spacing: .14em; font-weight: 700; }
 .topbar h1 { font-size: 31px; margin: 4px 0 7px; }
@@ -418,7 +418,7 @@ button, input { font: inherit; }
 /* Feel pack: navigation state, global command bar, loading/error/404 states */
 .nav-link.active { background: var(--panel); color: white; box-shadow: inset 2px 0 0 var(--accent); }
 .brand-link { color: inherit; }
-.command-region { max-width: 1500px; margin: 0 auto; padding: 30px 30px 0; }
+.command-region { max-width: 1500px; min-width: 0; margin: 0 auto; padding: 30px 30px 0; }
 .command-region .command-shell { margin-bottom: 0; }
 .command-kbd { color: #71809d; border: 1px solid #27667c; border-bottom-width: 2px; border-radius: 6px; padding: 2px 7px; font-size: 11px; font-family: inherit; white-space: nowrap; }
 .skeleton { border-radius: 10px; background: linear-gradient(100deg, rgba(148,163,184,.10) 40%, rgba(148,163,184,.22) 50%, rgba(148,163,184,.10) 60%); background-size: 200% 100%; animation: skeleton-pulse 1.4s ease-in-out infinite; }
@@ -502,7 +502,7 @@ html, body { overflow-x: clip; }
 
 @media (max-width: 1000px) {
   .sidebar { flex-wrap: wrap; gap: 10px 14px; padding-top: calc(12px + env(safe-area-inset-top)); }
-  .sidebar nav { order: 3; flex: 1 1 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; padding-bottom: 2px; }
+  .sidebar nav { order: 3; flex: 1 1 100%; min-width: 0; max-width: 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; padding-bottom: 2px; }
   .sidebar nav::-webkit-scrollbar { display: none; }
   .nav-link { white-space: nowrap; display: flex; align-items: center; min-height: 44px; }
   .command-region { padding: 20px 20px 0; }
