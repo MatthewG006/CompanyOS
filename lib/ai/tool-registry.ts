@@ -2,7 +2,14 @@ import type { PoolClient } from "pg";
 import { sendGoogleEmail } from "@/lib/integrations/google";
 import { queueFirstResponse } from "@/lib/ai/first-response";
 import { queueTaskExecution } from "@/lib/ai/queue-task-run";
-import { createWordPressPost } from "@/lib/integrations/wordpress";
+import {
+  createOrUpdateWordPressPage,
+  createWordPressPost,
+  replaceWordPressMenuItems,
+  type WordPressSettingsUpdate,
+  updateWordPressSiteSettings,
+  uploadWordPressMedia,
+} from "@/lib/integrations/wordpress";
 
 type AgentActionRequest = {
   reason: string;
@@ -22,6 +29,17 @@ type AgentActionRequest = {
   caption?: string;
   imagePrompt?: string;
   scheduledFor?: string;
+  pageId?: number;
+  slug?: string;
+  pageStatus?: "draft" | "publish";
+  sourceUrl?: string;
+  altText?: string;
+  menuId?: number;
+  menuItems?: Array<{ title: string; url: string; parentIndex?: number }>;
+  siteTitle?: string;
+  siteDescription?: string;
+  showOnFront?: "posts" | "page";
+  pageOnFront?: number;
 };
 
 const CONTENT_TYPES = new Set(["post", "reel", "story", "article"]);
@@ -49,6 +67,25 @@ function boundedText(value: unknown, limit: number) {
     const code = character.charCodeAt(0);
     return code < 32 || code === 127 ? " " : character;
   }).join("").trim().slice(0, limit);
+}
+
+function boundedInt(value: unknown, min: number, max: number): number | undefined {
+  const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+  return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : undefined;
+}
+
+function boundedSlug(value: unknown): string {
+  const slug = boundedText(value, 200).toLowerCase();
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) ? slug : "";
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 const createTaskTool: AgentTool = {
@@ -405,6 +442,199 @@ const publishWordPressPostTool: AgentTool = {
   },
 };
 
+const publishWordPressPageTool: AgentTool = {
+  actionType: "publish_wordpress_page",
+  permission: "request_wordpress_manage",
+  parseProposal(value) {
+    const reason = boundedText(value.reason, 500);
+    const title = boundedText(value.title, 200);
+    const content = typeof value.content === "string" ? value.content.trim().slice(0, 50_000) : "";
+    const pageId = boundedInt(value.page_id, 1, 2_147_483_647);
+    const slug = boundedSlug(value.slug);
+    const pageStatus = value.status === "publish" ? "publish" : "draft";
+    return value.type === "publish_wordpress_page" && content && reason && (title || pageId)
+      ? { title, content, reason, pageId, slug, pageStatus }
+      : null;
+  },
+  approvalPayload(value) {
+    return {
+      page_id: value.pageId ?? null,
+      slug: value.slug ?? "",
+      title: value.title,
+      content: value.content,
+      status: value.pageStatus ?? "draft",
+    };
+  },
+  approvalLabel(value) {
+    const live = value.pageStatus === "publish";
+    if (value.pageId) return `Update WordPress page #${value.pageId} (${live ? "LIVE" : "draft"}): ${value.title}`;
+    return `Publish WordPress page ${live ? "LIVE" : "draft"}: ${value.title}`;
+  },
+  async execute(client, projectId, agentId, rawPayload, runId) {
+    const payload = rawPayload && typeof rawPayload === "object" ? rawPayload as Record<string, unknown> : {};
+    const title = boundedText(payload.title, 200);
+    const content = typeof payload.content === "string" ? payload.content.trim() : "";
+    const pageId = boundedInt(payload.page_id, 1, 2_147_483_647);
+    const slug = boundedSlug(payload.slug);
+    const status = payload.status === "publish" ? "publish" : "draft";
+    if (!content || !(title || pageId) || !projectId) throw new Error("The approved WordPress page payload is invalid.");
+    const { page, created } = await createOrUpdateWordPressPage({ pageId, slug: slug || undefined, title, content, status });
+    await client.query(
+      `INSERT INTO events (source,event_type,title,severity,project_id,payload)
+       VALUES ('wordpress','wordpress_page_published','WordPress page saved from approved agent action','info',$1,$2::jsonb)`,
+      [projectId, JSON.stringify({ page_id: page.id, link: page.link, created, status, agent_run_id: runId, agent_id: agentId, title })],
+    );
+    return String(page.id);
+  },
+};
+
+const uploadWordPressMediaTool: AgentTool = {
+  actionType: "upload_wordpress_media",
+  permission: "request_wordpress_manage",
+  parseProposal(value) {
+    const reason = boundedText(value.reason, 500);
+    const sourceUrl = boundedText(value.source_url, 1000);
+    const title = boundedText(value.title, 200);
+    const altText = boundedText(value.alt_text, 300);
+    return value.type === "upload_wordpress_media" && sourceUrl && isHttpUrl(sourceUrl) && reason
+      ? { sourceUrl, title, altText, reason }
+      : null;
+  },
+  approvalPayload(value) {
+    return { source_url: value.sourceUrl, title: value.title ?? "", alt_text: value.altText ?? "" };
+  },
+  approvalLabel(value) {
+    return `Upload media to WordPress: ${value.title || value.sourceUrl}`;
+  },
+  async execute(client, projectId, agentId, rawPayload, runId) {
+    const payload = rawPayload && typeof rawPayload === "object" ? rawPayload as Record<string, unknown> : {};
+    const sourceUrl = boundedText(payload.source_url, 1000);
+    const title = boundedText(payload.title, 200);
+    const altText = boundedText(payload.alt_text, 300);
+    if (!sourceUrl || !isHttpUrl(sourceUrl) || !projectId) throw new Error("The approved WordPress media payload is invalid.");
+    // The source URL was visible in the approval; the adapter re-checks
+    // that it is a public http(s) host before fetching it server-side.
+    const media = await uploadWordPressMedia({ sourceUrl, title: title || undefined, altText: altText || undefined });
+    await client.query(
+      `INSERT INTO events (source,event_type,title,severity,project_id,payload)
+       VALUES ('wordpress','wordpress_media_uploaded','WordPress media uploaded from approved agent action','info',$1,$2::jsonb)`,
+      [projectId, JSON.stringify({ media_id: media.id, media_url: media.sourceUrl, link: media.link, source_url: sourceUrl, agent_run_id: runId, agent_id: agentId, title })],
+    );
+    return String(media.id);
+  },
+};
+
+function describeSettingsChanges(value: AgentActionRequest): string[] {
+  const parts: string[] = [];
+  if (value.siteTitle !== undefined) parts.push(`site title → "${value.siteTitle}"`);
+  if (value.siteDescription !== undefined) parts.push(`tagline → "${value.siteDescription}"`);
+  if (value.showOnFront !== undefined) parts.push(`homepage shows → ${value.showOnFront === "page" ? "a static page" : "latest posts"}`);
+  if (value.pageOnFront !== undefined) parts.push(`homepage page → #${value.pageOnFront}`);
+  return parts;
+}
+
+const updateWordPressSettingsTool: AgentTool = {
+  actionType: "update_wordpress_settings",
+  permission: "request_wordpress_manage",
+  parseProposal(value) {
+    const reason = boundedText(value.reason, 500);
+    const siteTitle = typeof value.title === "string" ? boundedText(value.title, 200) : undefined;
+    const siteDescription = typeof value.description === "string" ? boundedText(value.description, 300) : undefined;
+    const showOnFront = value.show_on_front === "page" || value.show_on_front === "posts" ? value.show_on_front : undefined;
+    const pageOnFront = boundedInt(value.page_on_front, 1, 2_147_483_647);
+    const changes: AgentActionRequest = { reason, siteTitle, siteDescription, showOnFront, pageOnFront };
+    return value.type === "update_wordpress_settings" && reason && describeSettingsChanges(changes).length ? changes : null;
+  },
+  approvalPayload(value) {
+    return {
+      ...(value.siteTitle !== undefined ? { title: value.siteTitle } : {}),
+      ...(value.siteDescription !== undefined ? { description: value.siteDescription } : {}),
+      ...(value.showOnFront !== undefined ? { show_on_front: value.showOnFront } : {}),
+      ...(value.pageOnFront !== undefined ? { page_on_front: value.pageOnFront } : {}),
+    };
+  },
+  approvalLabel(value) {
+    // Settings touch the whole site, so the approval spells out the exact
+    // diff the owner is approving — no hidden fields ride along.
+    return `Update WordPress site settings: ${describeSettingsChanges(value).join("; ")}`;
+  },
+  async execute(client, projectId, agentId, rawPayload, runId) {
+    const payload = rawPayload && typeof rawPayload === "object" ? rawPayload as Record<string, unknown> : {};
+    const update: WordPressSettingsUpdate = {
+      title: typeof payload.title === "string" ? boundedText(payload.title, 200) : undefined,
+      description: typeof payload.description === "string" ? boundedText(payload.description, 300) : undefined,
+      showOnFront: payload.show_on_front === "page" ? "page" : payload.show_on_front === "posts" ? "posts" : undefined,
+      pageOnFront: boundedInt(payload.page_on_front, 1, 2_147_483_647),
+    };
+    if (!describeSettingsChanges({ reason: "", siteTitle: update.title, siteDescription: update.description, showOnFront: update.showOnFront, pageOnFront: update.pageOnFront }).length || !projectId) {
+      throw new Error("The approved WordPress settings payload is invalid.");
+    }
+    const settings = await updateWordPressSiteSettings(update);
+    await client.query(
+      `INSERT INTO events (source,event_type,title,severity,project_id,payload)
+       VALUES ('wordpress','wordpress_settings_updated','WordPress site settings updated from approved agent action','info',$1,$2::jsonb)`,
+      [projectId, JSON.stringify({ changes: update, resulting_title: settings.title, resulting_show_on_front: settings.showOnFront, agent_run_id: runId, agent_id: agentId })],
+    );
+    return "settings";
+  },
+};
+
+function parseMenuItems(raw: unknown): NonNullable<AgentActionRequest["menuItems"]> | null {
+  if (!Array.isArray(raw) || !raw.length) return null;
+  const menuItems: NonNullable<AgentActionRequest["menuItems"]> = [];
+  for (const [index, entry] of raw.slice(0, 30).entries()) {
+    if (!entry || typeof entry !== "object") return null;
+    const item = entry as Record<string, unknown>;
+    const title = boundedText(item.title, 100);
+    const url = boundedText(item.url, 500);
+    const parentIndex = boundedInt(item.parent_index, 0, 29);
+    if (!title || !url || !isHttpUrl(url)) return null;
+    if (parentIndex !== undefined && parentIndex >= index) return null;
+    menuItems.push({ title, url, ...(parentIndex !== undefined ? { parentIndex } : {}) });
+  }
+  return menuItems.length ? menuItems : null;
+}
+
+const updateWordPressMenuTool: AgentTool = {
+  actionType: "update_wordpress_menu",
+  permission: "request_wordpress_manage",
+  parseProposal(value) {
+    const reason = boundedText(value.reason, 500);
+    const menuId = boundedInt(value.menu_id, 1, 2_147_483_647);
+    const menuItems = parseMenuItems(value.items);
+    return value.type === "update_wordpress_menu" && menuId && menuItems && reason
+      ? { menuId, menuItems, reason }
+      : null;
+  },
+  approvalPayload(value) {
+    return {
+      menu_id: value.menuId,
+      items: (value.menuItems ?? []).map((item) => ({
+        title: item.title,
+        url: item.url,
+        ...(item.parentIndex !== undefined ? { parent_index: item.parentIndex } : {}),
+      })),
+    };
+  },
+  approvalLabel(value) {
+    const titles = (value.menuItems ?? []).map((item) => item.title).join(", ");
+    return `Replace WordPress menu #${value.menuId} items (${value.menuItems?.length ?? 0}): ${titles.slice(0, 160)}`;
+  },
+  async execute(client, projectId, agentId, rawPayload, runId) {
+    const payload = rawPayload && typeof rawPayload === "object" ? rawPayload as Record<string, unknown> : {};
+    const menuId = boundedInt(payload.menu_id, 1, 2_147_483_647);
+    const menuItems = parseMenuItems(payload.items);
+    if (!menuId || !menuItems || !projectId) throw new Error("The approved WordPress menu payload is invalid.");
+    const result = await replaceWordPressMenuItems(menuId, menuItems);
+    await client.query(
+      `INSERT INTO events (source,event_type,title,severity,project_id,payload)
+       VALUES ('wordpress','wordpress_menu_updated','WordPress menu replaced from approved agent action','info',$1,$2::jsonb)`,
+      [projectId, JSON.stringify({ menu_id: result.menuId, item_count: result.itemCount, agent_run_id: runId, agent_id: agentId })],
+    );
+    return String(result.menuId);
+  },
+};
+
 const createContentItemTool: AgentTool = {
   actionType: "create_content_item",
   permission: "request_content_item",
@@ -454,6 +684,10 @@ const registry = new Map<string, AgentTool>([
   [createSalesLeadTool.actionType, createSalesLeadTool],
   [sendEmailTool.actionType, sendEmailTool],
   [publishWordPressPostTool.actionType, publishWordPressPostTool],
+  [publishWordPressPageTool.actionType, publishWordPressPageTool],
+  [uploadWordPressMediaTool.actionType, uploadWordPressMediaTool],
+  [updateWordPressSettingsTool.actionType, updateWordPressSettingsTool],
+  [updateWordPressMenuTool.actionType, updateWordPressMenuTool],
 ]);
 
 export function getAgentTool(actionType: unknown) {
