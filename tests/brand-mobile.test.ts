@@ -54,6 +54,15 @@ test("the auth proxy lets the login page load the brand logo unauthenticated", (
     /matcher: \["\/\(\(\?!_next\/static\|_next\/image\|favicon\.ico\|brand-logo\.png\|/,
     "proxy matcher must exclude brand-logo.png, like favicon.ico",
   );
+  // The unified brand logos live under /brand/ (public/brand/) and are
+  // referenced by the brand kits, whose consumers (agents, the design
+  // studio) fetch them without an owner session; if the proxy intercepts
+  // those requests they redirect to /login and return HTML, not the PNG.
+  assert.match(
+    proxy,
+    /brand-logo\.png\|brand\/\|/,
+    "proxy matcher must exclude the /brand/ asset folder, like brand-logo.png",
+  );
 });
 
 test("the layout declares a mobile viewport with the brand theme color", () => {
