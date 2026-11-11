@@ -16,13 +16,14 @@ test("the brand palette from the logo drives the theme tokens", () => {
   assert.match(styles, /--brand: #4196b3;/, "brand deep teal token missing");
   assert.match(styles, /--brand-sky: #54c9ea;/, "brand sky token missing");
   assert.match(styles, /--accent: #54c9ea;/, "accent must be the logo sky blue");
-  assert.match(styles, /--bg: #07191f;/, "background must be the deep teal-navy");
-  assert.match(styles, /--border: #1e4657;/, "border must be the teal border");
+  assert.match(styles, /--bg: #ffffff;/, "main background must be white");
+  assert.match(styles, /--text: #10303d;/, "main text must be the deep teal ink");
+  assert.match(styles, /--border: #c3dde6;/, "border must be the light teal tint");
 });
 
 test("no indigo or violet theme colors remain", () => {
   const styles = css().toLowerCase();
-  for (const stale of ["#7c8cff", "#6c77ff", "#9c68ff", "#a978ff", "#586bd0", "#11182a", "#0c1323"]) {
+  for (const stale of ["#7c8cff", "#6c77ff", "#9c68ff", "#a978ff", "#586bd0", "#11182a", "#0c1323", "#07191f"]) {
     assert.ok(!styles.includes(stale), `stale pre-brand color ${stale} is still in globals.css`);
   }
 });
@@ -45,7 +46,7 @@ test("the owner-supplied logo ships and is used in the sidebar and login", () =>
 test("the layout declares a mobile viewport with the brand theme color", () => {
   const layout = read("app/layout.tsx");
   assert.match(layout, /export const viewport/, "layout must export a viewport");
-  assert.match(layout, /themeColor: "#07191f"/, "theme color must match the brand background");
+  assert.match(layout, /themeColor: "#ffffff"/, "theme color must match the white background");
 });
 
 test("mobile layout: full-width nav row, touch targets, no squeezed rows", () => {
@@ -58,6 +59,12 @@ test("mobile layout: full-width nav row, touch targets, no squeezed rows", () =>
   assert.match(styles, /\.sync-row \{ grid-template-columns: 1fr 1fr; \}/, "sync rows must collapse on phones instead of squeezing four columns");
   assert.match(styles, /\.command-kbd \{ display: none; \}/, "the keyboard hint must hide on phones");
   assert.match(styles, /overflow-x: clip;/, "horizontal overflow must be clipped");
+});
+
+test("the sidebar keeps the deep teal ring while the main area is light", () => {
+  const styles = css();
+  assert.ok(styles.includes("color: #f2f9fc; --text: #f4f7fb;"), "sidebar must scope its own light-on-teal tokens");
+  assert.match(styles, /\.agency-switch-btn\.active \{ background: var\(--brand\);/, "the active business switcher must fill with brand teal, not the white panel color");
 });
 
 test("the demo brand kit for Sky Mountain Graphics carries the real logo colors", () => {
