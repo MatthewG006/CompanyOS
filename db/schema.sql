@@ -240,6 +240,10 @@ ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS result JSONB;
 ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS error TEXT;
 ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS retry_of_run_id UUID REFERENCES agent_runs(id) ON DELETE SET NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_retry_once ON agent_runs(retry_of_run_id) WHERE retry_of_run_id IS NOT NULL;
+-- Automatic retries (lib/ai/run-retry.ts) are held back until this time;
+-- NULL means the run can be claimed immediately. Both claim queries (the
+-- worker route and the worker script's database mode) honor it.
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS available_at TIMESTAMPTZ;
 ALTER TABLE approvals ADD COLUMN IF NOT EXISTS agent_run_id UUID REFERENCES agent_runs(id) ON DELETE SET NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_approval_proposal ON approvals(agent_run_id,proposal_index)
   WHERE agent_run_id IS NOT NULL AND proposal_index IS NOT NULL;

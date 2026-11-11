@@ -10,6 +10,7 @@ import { executeWithFallback, planDispatch } from "@/lib/ai/dispatch-plan";
 import { expireStaleHandoffs, handoffExpiryHours } from "@/lib/ai/handoff-expiry";
 import { capNotice, localCapStatus, localRunsPerHour } from "@/lib/ai/local-cap";
 import { normalizeProviderList, normalizeTaskCapabilities, normalizeTaskConstraints, type TaskSpec } from "@/lib/ai/task-spec";
+import { handleFailedRun } from "@/lib/ai/run-retry";
 import { dispatchDueSalesFollowups } from "@/lib/workflows/sales-followups";
 import { processNextOutboundEmail } from "@/lib/workflows/outbound-email";
 
@@ -61,15 +62,22 @@ export async function POST(request: Request) {
 
   try {
     const run = await transaction(async (client) => {
-      await client.query(`WITH expired AS (
-          UPDATE agent_runs SET status='failed',error='Worker lease expired.',summary='Worker lease expired.',completed_at=NOW()
-          WHERE status='running' AND provider IN ('codex-cli', 'ollama', 'auto') AND summary='Worker running.' AND started_at < NOW()-INTERVAL '5 minutes'
-          RETURNING id
-        )
-        UPDATE workflow_dispatches SET status='failed' WHERE agent_run_id IN (SELECT id FROM expired)`);
+      // Lease-expired runs are failures like any other: each one goes
+      // through the retry/escalation policy (lib/ai/run-retry.ts) so it
+      // ends with a retry or an owner attention item, never silence.
+      const expired = await client.query<{ id: string }>(
+        `UPDATE agent_runs SET status='failed',error='Worker lease expired.',summary='Worker lease expired.',completed_at=NOW()
+         WHERE status='running' AND provider IN ('codex-cli', 'ollama', 'auto') AND summary='Worker running.' AND started_at < NOW()-INTERVAL '5 minutes'
+         RETURNING id`,
+      );
+      if (expired.rows.length) {
+        await client.query("UPDATE workflow_dispatches SET status='failed' WHERE agent_run_id = ANY($1::uuid[])", [expired.rows.map((row) => row.id)]);
+        for (const row of expired.rows) await handleFailedRun(client, row.id);
+      }
       const result = await client.query<{ id: string; task_id: string | null; input: Record<string, unknown> }>(
         `WITH candidate AS (
            SELECT id FROM agent_runs WHERE status='queued' AND provider IN ('codex-cli', 'ollama', 'auto', 'agnostic')
+             AND (available_at IS NULL OR available_at <= NOW())
            ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
          )
          UPDATE agent_runs r SET status='running',summary='Worker running.',started_at=NOW(),error=NULL
@@ -103,6 +111,8 @@ export async function POST(request: Request) {
       await transaction(async (client) => {
         await client.query(`UPDATE agent_runs SET status='failed',error='Queued task is missing, complete, or unassigned.',summary='Delegated task could not start.',completed_at=NOW() WHERE id=$1 AND status='running'`, [run.id]);
         await client.query("UPDATE workflow_dispatches SET status='failed' WHERE agent_run_id=$1", [run.id]);
+        // Permanent failure: escalates to an owner attention item.
+        await handleFailedRun(client, run.id);
       });
       return NextResponse.json({ worked: true, run_id: run.id, status: "failed" });
     }
@@ -128,6 +138,8 @@ export async function POST(request: Request) {
       await transaction(async (client) => {
         await client.query(`UPDATE agent_runs SET status='failed',error='No automatic provider satisfies the task execution requirements.'||$2::text,summary='Task requirements cannot be executed by the worker.',completed_at=NOW() WHERE id=$1 AND status='running'`, [run.id, capNotice(localCap)]);
         await client.query("UPDATE workflow_dispatches SET status='failed' WHERE agent_run_id=$1", [run.id]);
+        // Permanent failure: escalates to an owner attention item.
+        await handleFailedRun(client, run.id);
       });
       return NextResponse.json({ worked: true, run_id: run.id, status: "failed", task_requirements: taskSpec });
     }
@@ -159,6 +171,9 @@ export async function POST(request: Request) {
         await client.query("UPDATE agent_runs SET status='failed',error=$2,summary='Delegated run failed.',completed_at=NOW() WHERE id=$1 AND status='running'", [run.id, detail]);
         await client.query("UPDATE workflow_dispatches SET status='failed' WHERE agent_run_id=$1", [run.id]);
         await client.query("INSERT INTO events (source,event_type,title,severity,payload) VALUES ('agent-router','agent_run_failed',$1,'warning',$2::jsonb)", [`Delegated task run failed: ${task.title}`, JSON.stringify({ run_id: run.id, task_id: task.id, error: detail })]);
+        // Bounded automatic retry for transient failures; otherwise an
+        // owner attention item. Either way the failure is never silent.
+        await handleFailedRun(client, run.id);
       });
       return NextResponse.json({ worked: true, run_id: run.id, status: "failed" });
     }
