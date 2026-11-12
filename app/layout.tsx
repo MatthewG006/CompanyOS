@@ -3,6 +3,7 @@ import "./globals.css";
 import { AdminTokenProvider } from "@/components/AdminToken";
 import { GlobalCommandBar } from "@/components/GlobalCommandBar";
 import { Sidebar } from "@/components/Sidebar";
+import { VoiceAssistant } from "@/components/VoiceAssistant";
 
 export const metadata: Metadata = {
   title: "Sky Mountain CompanyOS",
@@ -26,6 +27,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
               <GlobalCommandBar />
               {children}
             </main>
+            <VoiceAssistant />
           </div>
         </AdminTokenProvider>
       </body>
