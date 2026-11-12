@@ -10,6 +10,18 @@ import {
   updateWordPressSiteSettings,
   uploadWordPressMedia,
 } from "@/lib/integrations/wordpress";
+import {
+  getProxmoxContainer,
+  getProxmoxContainerConfig,
+  isProxmoxManageAction,
+  type ProxmoxManageAction,
+  rebootProxmoxContainer,
+  resizeProxmoxContainer,
+  shutdownProxmoxContainer,
+  snapshotProxmoxContainer,
+  startProxmoxContainer,
+  stopProxmoxContainer,
+} from "@/lib/integrations/proxmox";
 
 type AgentActionRequest = {
   reason: string;
@@ -40,6 +52,17 @@ type AgentActionRequest = {
   siteDescription?: string;
   showOnFront?: "posts" | "page";
   pageOnFront?: number;
+  proxmoxNode?: string;
+  vmid?: number;
+  containerName?: string;
+  proxmoxAction?: ProxmoxManageAction;
+  snapshotName?: string;
+  cores?: number;
+  memoryMb?: number;
+  swapMb?: number;
+  currentCores?: number;
+  currentMemoryMb?: number;
+  currentSwapMb?: number;
 };
 
 const CONTENT_TYPES = new Set(["post", "reel", "story", "article"]);
@@ -635,6 +658,172 @@ const updateWordPressMenuTool: AgentTool = {
   },
 };
 
+function boundedNodeName(value: unknown): string {
+  const node = boundedText(value, 63);
+  return /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/.test(node) ? node : "";
+}
+
+function boundedSnapshotName(value: unknown): string {
+  const name = boundedText(value, 40);
+  return /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name) && name.toLowerCase() !== "current" ? name : "";
+}
+
+const PROXMOX_CORES_MIN = 1;
+const PROXMOX_CORES_MAX = 64;
+const PROXMOX_MEMORY_MIN_MB = 128;
+const PROXMOX_MEMORY_MAX_MB = 131_072;
+const PROXMOX_SWAP_MAX_MB = 65_536;
+
+function proxmoxResizeParts(value: AgentActionRequest): string[] {
+  const parts: string[] = [];
+  if (value.cores !== undefined && value.currentCores !== undefined && value.cores !== value.currentCores) {
+    parts.push(`cores ${value.currentCores} → ${value.cores}`);
+  }
+  if (value.memoryMb !== undefined && value.currentMemoryMb !== undefined && value.memoryMb !== value.currentMemoryMb) {
+    parts.push(`memory ${value.currentMemoryMb} MB → ${value.memoryMb} MB`);
+  }
+  if (value.swapMb !== undefined && value.currentSwapMb !== undefined && value.swapMb !== value.currentSwapMb) {
+    parts.push(`swap ${value.currentSwapMb} MB → ${value.swapMb} MB`);
+  }
+  return parts;
+}
+
+function proxmoxTargetLabel(value: AgentActionRequest): string {
+  return `LXC ${value.vmid}${value.containerName ? ` "${value.containerName}"` : ""} on ${value.proxmoxNode}`;
+}
+
+const manageProxmoxContainerTool: AgentTool = {
+  actionType: "manage_proxmox_container",
+  permission: "request_proxmox_manage",
+  parseProposal(value) {
+    const reason = boundedText(value.reason, 500);
+    const proxmoxNode = boundedNodeName(value.node);
+    const vmid = boundedInt(value.vmid, 100, 999_999_999);
+    const containerName = boundedText(value.container_name, 120);
+    const rawAction = value.action;
+    const action: ProxmoxManageAction | undefined = isProxmoxManageAction(rawAction) ? rawAction : undefined;
+    if (value.type !== "manage_proxmox_container" || !reason || !proxmoxNode || !vmid || !action) return null;
+    if (action === "snapshot") {
+      const snapshotName = boundedSnapshotName(value.snapshot_name);
+      return snapshotName ? { reason, proxmoxNode, vmid, containerName, proxmoxAction: action, snapshotName } : null;
+    }
+    if (action === "resize") {
+      const cores = boundedInt(value.cores, PROXMOX_CORES_MIN, PROXMOX_CORES_MAX);
+      const memoryMb = boundedInt(value.memory_mb, PROXMOX_MEMORY_MIN_MB, PROXMOX_MEMORY_MAX_MB);
+      const swapMb = boundedInt(value.swap_mb, 0, PROXMOX_SWAP_MAX_MB);
+      const currentCores = boundedInt(value.current_cores, PROXMOX_CORES_MIN, PROXMOX_CORES_MAX);
+      const currentMemoryMb = boundedInt(value.current_memory_mb, PROXMOX_MEMORY_MIN_MB, PROXMOX_MEMORY_MAX_MB);
+      const currentSwapMb = boundedInt(value.current_swap_mb, 0, PROXMOX_SWAP_MAX_MB);
+      const candidate: AgentActionRequest = {
+        reason, proxmoxNode, vmid, containerName, proxmoxAction: action,
+        cores, memoryMb, swapMb, currentCores, currentMemoryMb, currentSwapMb,
+      };
+      const anyChange = cores !== undefined || memoryMb !== undefined || swapMb !== undefined;
+      const missingBefore = (cores !== undefined && currentCores === undefined)
+        || (memoryMb !== undefined && currentMemoryMb === undefined)
+        || (swapMb !== undefined && currentSwapMb === undefined);
+      // A resize the owner cannot see as an exact before → after diff is
+      // not a valid proposal: every changed field needs its before-value,
+      // and at least one field must actually change.
+      if (!anyChange || missingBefore || !proxmoxResizeParts(candidate).length) return null;
+      return {
+        reason, proxmoxNode, vmid, containerName, proxmoxAction: action,
+        ...(cores !== undefined && cores !== currentCores ? { cores, currentCores } : {}),
+        ...(memoryMb !== undefined && memoryMb !== currentMemoryMb ? { memoryMb, currentMemoryMb } : {}),
+        ...(swapMb !== undefined && swapMb !== currentSwapMb ? { swapMb, currentSwapMb } : {}),
+      };
+    }
+    return { reason, proxmoxNode, vmid, containerName, proxmoxAction: action };
+  },
+  approvalPayload(value) {
+    return {
+      node: value.proxmoxNode,
+      vmid: value.vmid,
+      container_name: value.containerName ?? "",
+      action: value.proxmoxAction,
+      ...(value.snapshotName ? { snapshot_name: value.snapshotName } : {}),
+      ...(value.cores !== undefined ? { cores: value.cores, current_cores: value.currentCores } : {}),
+      ...(value.memoryMb !== undefined ? { memory_mb: value.memoryMb, current_memory_mb: value.currentMemoryMb } : {}),
+      ...(value.swapMb !== undefined ? { swap_mb: value.swapMb, current_swap_mb: value.currentSwapMb } : {}),
+    };
+  },
+  approvalLabel(value) {
+    const target = proxmoxTargetLabel(value);
+    switch (value.proxmoxAction) {
+      case "start": return `Start Proxmox ${target}`;
+      case "shutdown": return `Shut down Proxmox ${target}`;
+      case "stop": return `Stop Proxmox ${target}`;
+      case "reboot": return `Reboot Proxmox ${target}`;
+      case "snapshot": return `Snapshot Proxmox ${target} as "${value.snapshotName}"`;
+      case "resize": return `Resize Proxmox ${target}: ${proxmoxResizeParts(value).join("; ")}`;
+      default: return `Manage Proxmox ${target}`;
+    }
+  },
+  async execute(client, projectId, agentId, rawPayload, runId) {
+    const payload = rawPayload && typeof rawPayload === "object" ? rawPayload as Record<string, unknown> : {};
+    const node = boundedNodeName(payload.node);
+    const vmid = boundedInt(payload.vmid, 100, 999_999_999);
+    const containerName = boundedText(payload.container_name, 120);
+    const rawAction = payload.action;
+    // Defense in depth: the action is re-validated against the v1
+    // allowlist at execution time, not just when the proposal was
+    // recorded — a tampered or legacy payload cannot widen the surface
+    // beyond start / shutdown / stop / reboot / snapshot / resize.
+    const action: ProxmoxManageAction | undefined = isProxmoxManageAction(rawAction) ? rawAction : undefined;
+    if (!node || !vmid || !action || !projectId) throw new Error("The approved Proxmox payload is invalid.");
+    const container = await getProxmoxContainer(node, vmid);
+    if (!container) throw new Error(`Proxmox container ${vmid} was not found on node ${node}; approval was not applied.`);
+    if (containerName && container.name && container.name !== containerName) {
+      throw new Error(`Proxmox container ${vmid} is now named "${container.name}", not "${containerName}"; approval was not applied.`);
+    }
+    let detail = "";
+    if (action === "resize") {
+      const cores = boundedInt(payload.cores, PROXMOX_CORES_MIN, PROXMOX_CORES_MAX);
+      const memoryMb = boundedInt(payload.memory_mb, PROXMOX_MEMORY_MIN_MB, PROXMOX_MEMORY_MAX_MB);
+      const swapMb = boundedInt(payload.swap_mb, 0, PROXMOX_SWAP_MAX_MB);
+      const currentCores = boundedInt(payload.current_cores, PROXMOX_CORES_MIN, PROXMOX_CORES_MAX);
+      const currentMemoryMb = boundedInt(payload.current_memory_mb, PROXMOX_MEMORY_MIN_MB, PROXMOX_MEMORY_MAX_MB);
+      const currentSwapMb = boundedInt(payload.current_swap_mb, 0, PROXMOX_SWAP_MAX_MB);
+      const candidate: AgentActionRequest = {
+        reason: "", proxmoxNode: node, vmid, containerName, proxmoxAction: action,
+        cores, memoryMb, swapMb, currentCores, currentMemoryMb, currentSwapMb,
+      };
+      const missingBefore = (cores !== undefined && currentCores === undefined)
+        || (memoryMb !== undefined && currentMemoryMb === undefined)
+        || (swapMb !== undefined && currentSwapMb === undefined);
+      if (missingBefore || !proxmoxResizeParts(candidate).length) throw new Error("The approved Proxmox resize payload is invalid.");
+      const live = await getProxmoxContainerConfig(node, vmid);
+      if ((cores !== undefined && live.cores !== currentCores)
+        || (memoryMb !== undefined && live.memoryMb !== currentMemoryMb)
+        || (swapMb !== undefined && live.swapMb !== currentSwapMb)) {
+        throw new Error("The container's live config no longer matches the approved before-values; approval was not applied.");
+      }
+      await resizeProxmoxContainer(node, vmid, { cores, memoryMb, swapMb });
+      detail = proxmoxResizeParts(candidate).join("; ");
+    } else if (action === "snapshot") {
+      const snapshotName = boundedSnapshotName(payload.snapshot_name);
+      if (!snapshotName) throw new Error("The approved Proxmox snapshot payload is invalid.");
+      await snapshotProxmoxContainer(node, vmid, snapshotName, "Created by CompanyOS from an owner-approved DevOps proposal.");
+      detail = `snapshot "${snapshotName}"`;
+    } else {
+      const taskId = action === "start"
+        ? await startProxmoxContainer(node, vmid)
+        : action === "shutdown"
+          ? await shutdownProxmoxContainer(node, vmid)
+          : action === "stop"
+            ? await stopProxmoxContainer(node, vmid)
+            : await rebootProxmoxContainer(node, vmid);
+      detail = `proxmox task ${taskId}`;
+    }
+    await client.query(
+      `INSERT INTO events (source,event_type,title,severity,project_id,payload)
+       VALUES ('proxmox','proxmox_container_managed','Proxmox container action executed from approved agent action','info',$1,$2::jsonb)`,
+      [projectId, JSON.stringify({ node, vmid, container_name: container.name || containerName, action, detail, agent_run_id: runId, agent_id: agentId })],
+    );
+    return `${node}/${vmid}`;
+  },
+};
+
 const createContentItemTool: AgentTool = {
   actionType: "create_content_item",
   permission: "request_content_item",
@@ -688,6 +877,7 @@ const registry = new Map<string, AgentTool>([
   [uploadWordPressMediaTool.actionType, uploadWordPressMediaTool],
   [updateWordPressSettingsTool.actionType, updateWordPressSettingsTool],
   [updateWordPressMenuTool.actionType, updateWordPressMenuTool],
+  [manageProxmoxContainerTool.actionType, manageProxmoxContainerTool],
 ]);
 
 export function getAgentTool(actionType: unknown) {

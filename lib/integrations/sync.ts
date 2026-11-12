@@ -1,6 +1,7 @@
 import { query } from "../db";
 import { syncCalendar, syncGmail } from "./google";
 import { fetchJson } from "./http";
+import { checkProxmoxManageAccess, getProxmoxNodeStatus, getProxmoxNodes } from "./proxmox";
 import { upsertExternalRecord } from "./records";
 
 type SyncResult = { seen: number; written: number };
@@ -91,19 +92,8 @@ async function syncNextcloud(): Promise<SyncResult> {
   return { seen: 1, written: 1 };
 }
 
-async function proxmoxRequest<T>(path: string): Promise<T> {
-  const base = (process.env.PVE_API_URL ?? "").replace(/\/$/, "");
-  const tokenId = process.env.PVE_TOKEN_ID;
-  const tokenSecret = process.env.PVE_TOKEN_SECRET;
-  if (!base || !tokenId || !tokenSecret) throw new Error("PVE_API_URL, PVE_TOKEN_ID and PVE_TOKEN_SECRET are required.");
-  const response = await fetchJson<{ data: T }>(`${base}/api2/json${path}`, {
-    headers: { Authorization: `PVEAPIToken=${tokenId}=${tokenSecret}` },
-  });
-  return response.data;
-}
-
 async function syncProxmox(): Promise<SyncResult> {
-  const nodes = await proxmoxRequest<Array<{ node: string; status: string }>>("/nodes");
+  const nodes = await getProxmoxNodes();
   let written = 0;
   const cloudProject = await query<{ id: string }>("SELECT id FROM projects WHERE slug='sky-mountain-cloud' LIMIT 1");
   for (const node of nodes) {
@@ -111,7 +101,7 @@ async function syncProxmox(): Promise<SyncResult> {
     let status = node.status;
     let details = `Proxmox node ${node.node}`;
     try {
-      const nodeStatus = await proxmoxRequest<{ uptime?: number; cpu?: number; memory?: { used?: number; total?: number }; rootfs?: { used?: number; total?: number } }>(`/nodes/${encodeURIComponent(node.node)}/status`);
+      const nodeStatus = await getProxmoxNodeStatus(node.node);
       details = `${node.node}: CPU ${Math.round((nodeStatus.cpu ?? 0) * 100)}%, memory ${nodeStatus.memory?.used ? Math.round(nodeStatus.memory.used / (nodeStatus.memory.total || 1) * 100) : 0}%`;
       status = "healthy";
     } catch (error) {
@@ -121,6 +111,24 @@ async function syncProxmox(): Promise<SyncResult> {
     await query(`INSERT INTO system_checks (project_id,system_name,status,latency_ms,details)
       VALUES ($1,$2,$3,$4,$5)`, [cloudProject.rows[0]?.id ?? null, `Proxmox:${node.node}`, status === "online" || status === "healthy" ? "healthy" : "error", Date.now() - started, details]);
     written += 1;
+  }
+  // Manage-access probe (Proxmox agent-access pack): read-only, best
+  // effort — it reports whether the configured token holds the privileges
+  // the DevOps management tool needs per container, and must never fail
+  // the status sync above.
+  try {
+    const probeStarted = Date.now();
+    const access = await checkProxmoxManageAccess();
+    const accessStatus = !access.configured
+      ? "error"
+      : access.containers.length > 0 && access.manageableCount === access.containers.length
+        ? "healthy"
+        : "warning";
+    await query(`INSERT INTO system_checks (project_id,system_name,status,latency_ms,details)
+      VALUES ($1,'Proxmox:manage-access',$2,$3,$4)`, [cloudProject.rows[0]?.id ?? null, accessStatus, Date.now() - probeStarted, access.message]);
+    written += 1;
+  } catch {
+    // The probe is advisory; the node status rows are the sync's contract.
   }
   return { seen: nodes.length, written };
 }

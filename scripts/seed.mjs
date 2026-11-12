@@ -66,6 +66,7 @@ for (const row of agents) {
     ...(["Engineer", "Designer", "Graphics", "Marketing"].includes(row[0]) ? ["request_wordpress_publish"] : []),
     ...(["Engineer", "Designer", "Graphics", "Marketing"].includes(row[0]) ? ["request_wordpress_manage"] : []),
     ...(row[0] === "Marketing" ? ["request_content_item"] : []),
+    ...(row[0] === "DevOps" ? ["request_proxmox_manage"] : []),
   ];
   const result = await client.query(
     "INSERT INTO agents (name,role,department,provider,status,description,allowed_actions,memory_scope) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb) RETURNING id",
