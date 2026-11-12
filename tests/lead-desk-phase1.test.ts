@@ -62,6 +62,10 @@ test("website validation only accepts public http(s) URLs", () => {
   assert.equal(validateWebsiteUrl("ftp://example.com/"), null);
   assert.equal(validateWebsiteUrl("https://user:pass@example.com/"), null);
   assert.equal(validateWebsiteUrl("not a url"), null);
+  // Bare domains are read as https; a lone word with no dot is still invalid.
+  assert.equal(validateWebsiteUrl("example.com"), "https://example.com/");
+  assert.equal(validateWebsiteUrl("www.example.com/path"), "https://www.example.com/path");
+  assert.equal(validateWebsiteUrl("example"), null);
 });
 
 test("brand kit API: owner-reviewed saves, extraction never persists", () => {

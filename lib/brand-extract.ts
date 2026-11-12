@@ -20,9 +20,17 @@ const RESERVED_INSTAGRAM_PATHS = new Set(["p", "reel", "reels", "stories", "expl
 /** Accept only public http(s) URLs: no localhost, no private/link-local IP
  *  literals, no credentials. Returns the normalized URL or null. */
 export function validateWebsiteUrl(raw: string): string | null {
+  let candidate = raw.trim();
+  // Owners paste bare domains ("example.com") as often as full URLs; treat a
+  // scheme-less, space-less host with a dot as https. Anything else without a
+  // scheme stays invalid, and explicit non-http(s) schemes are still rejected
+  // by the protocol check below.
+  if (candidate && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(candidate) && !/\s/.test(candidate) && candidate.includes(".")) {
+    candidate = `https://${candidate}`;
+  }
   let url: URL;
   try {
-    url = new URL(raw.trim());
+    url = new URL(candidate);
   } catch {
     return null;
   }

@@ -4,6 +4,7 @@ import { extractBrandFromHtml, validateWebsiteUrl } from "@/lib/brand-extract";
 import { databaseAvailable, query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 function authorized(request: Request) {
   if (process.env.NODE_ENV === "production" && request.headers.get("x-companyos-owner-authenticated") === "true") return true;
@@ -35,8 +36,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Provide a public http(s) website URL to read — paste the business website first." }, { status: 400 });
     }
 
+    // Slow sites (cold WordPress hosting regularly answers in 6s+) need more
+    // than a few seconds; 20s with a plain-language timeout error beats an
+    // 8s abort surfacing as "This operation was aborted".
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = setTimeout(() => controller.abort(), 20000);
     let response: Response;
     try {
       response = await fetch(validated, {
@@ -44,6 +48,11 @@ export async function POST(request: Request) {
         redirect: "follow",
         headers: { "user-agent": "CompanyOS brand reader (+owner-requested)", accept: "text/html,application/xhtml+xml" },
       });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return NextResponse.json({ error: "That website took too long to answer (over 20 seconds). Wait a moment and try again." }, { status: 400 });
+      }
+      throw error;
     } finally {
       clearTimeout(timeout);
     }
