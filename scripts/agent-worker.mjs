@@ -458,11 +458,17 @@ if (useDatabaseMode) {
         } else {
           // Construct prompt, preferring existing input prompt if available
           const role = task.agent_name ? `${task.agent_name}${task.agent_role ? ` (${task.agent_role})` : ""}` : "CompanyOS task agent";
+          const canGenerateImagesFallback = Array.isArray(task.agent_allowed_actions) && task.agent_allowed_actions.includes("request_image_generation");
           const prompt = claimed.input?.prompt || [
             `You are acting as ${role} for CompanyOS.`,
             task.agent_mission ? `Mission: ${task.agent_mission}` : "",
             `Project: ${task.project_name ?? "Company-wide"}`,
             `Task: ${task.title}`,
+            // Backstop for runs queued without a stored prompt: without
+            // this, an agent asked for an image reaches for Codex's
+            // built-in image tool, which the sandbox's approval policy
+            // ("never") always refuses.
+            canGenerateImagesFallback ? `You have NO direct image-generation tool here (the built-in one is disabled). To create an image, return a proposed_actions entry {"type":"generate_image","prompt":"<full image description>","count":1,"purpose":"social post","reason":"<why>"}.` : "",
             `Return one JSON object: {"summary":"...","work_completed":[],"evidence":[],"risks":[],"next_actions":[],"proposed_actions":[]}`,
           ].filter(Boolean).join("\n");
 
@@ -697,15 +703,16 @@ if (useDatabaseMode) {
                   // Mirror generateImageTool in lib/ai/tool-registry.ts:
                   // EVERY agent holding request_image_generation may
                   // propose image generation (no role restriction), the
-                  // run must be project-scoped, and fields are bounded
-                  // the same way before anything reaches approvals.
+                  // task's project may be null (company-wide / client
+                  // work), and fields are bounded the same way before
+                  // anything reaches approvals.
                   // Payload shape and approval label match the registry
                   // exactly so an approved row executes identically in
                   // both modes.
                   const canGenerateImages = Array.isArray(task.agent_allowed_actions) && task.agent_allowed_actions.includes("request_image_generation");
                   const imagePurposes = new Set(["social post", "website", "other"]);
                   for (const [idx, prop] of parsed.proposed_actions.slice(0, 5).entries()) {
-                    if (prop?.type !== "generate_image" || !canGenerateImages || !task.project_id) continue;
+                    if (prop?.type !== "generate_image" || !canGenerateImages) continue;
                     const promptText = boundedText(prop.prompt, 1000);
                     const reason = boundedText(prop.reason, 500);
                     const count = Number.isInteger(prop.count) && prop.count >= 1 && prop.count <= 4 ? prop.count : 3;
