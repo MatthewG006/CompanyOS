@@ -11,9 +11,7 @@ const REQUIRED_ISOLATION_TOKENS = [
   "--ignore-user-config",
   'approval_policy="never"',
   'default_permissions="companyos_isolated"',
-  'permissions.companyos_isolated.filesystem.":root"="deny"',
-  'permissions.companyos_isolated.filesystem.":minimal"="read"',
-  'permissions.companyos_isolated.filesystem.":workspace_roots"."."="read"',
+  'permissions.companyos_isolated.filesystem={ ":root" = "deny", ":minimal" = "read", ":workspace_roots" = { "." = "read" } }',
   "permissions.companyos_isolated.network.enabled=false",
   'shell_environment_policy.inherit="none"',
 ];

@@ -224,9 +224,10 @@ export async function runWithCodexCli(prompt: string): Promise<ProviderResult> {
         "--cd", workspace, "--skip-git-repo-check",
         "-c", 'approval_policy="never"',
         "-c", 'default_permissions="companyos_isolated"',
-        "-c", 'permissions.companyos_isolated.filesystem.":root"="deny"',
-        "-c", 'permissions.companyos_isolated.filesystem.":minimal"="read"',
-        "-c", 'permissions.companyos_isolated.filesystem.":workspace_roots"."."="read"',
+        // Inline table, not dotted keys: Codex's -c parser rejects dotted
+        // keys with quoted special-path segments (":root") and the config
+        // fails to load (FilesystemPermissionToml). See agent-worker.mjs.
+        "-c", 'permissions.companyos_isolated.filesystem={ ":root" = "deny", ":minimal" = "read", ":workspace_roots" = { "." = "read" } }',
         "-c", "permissions.companyos_isolated.network.enabled=false",
         "-c", 'shell_environment_policy.inherit="none"',
         "-",
