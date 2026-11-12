@@ -66,9 +66,13 @@ async function checkCodexStatus() {
 const CODEX_ISOLATION_CONFIG_ARGS = [
   "-c", 'approval_policy="never"',
   "-c", 'default_permissions="companyos_isolated"',
-  "-c", 'permissions.companyos_isolated.filesystem.":root"="deny"',
-  "-c", 'permissions.companyos_isolated.filesystem.":minimal"="read"',
-  "-c", 'permissions.companyos_isolated.filesystem.":workspace_roots"."."="read"',
+  // The filesystem table MUST be one inline-table override: Codex's -c
+  // parser rejects dotted keys with quoted special-path segments (":root")
+  // — the merged config fails to load with "data did not match any variant
+  // of untagged enum FilesystemPermissionToml". Verified live against
+  // codex-cli 0.166.0 / 0.167.2 (doctor): dotted form rejected, inline
+  // table and config-file forms accepted.
+  "-c", 'permissions.companyos_isolated.filesystem={ ":root" = "deny", ":minimal" = "read", ":workspace_roots" = { "." = "read" } }',
   "-c", "permissions.companyos_isolated.network.enabled=false",
   "-c", 'shell_environment_policy.inherit="none"',
 ];
