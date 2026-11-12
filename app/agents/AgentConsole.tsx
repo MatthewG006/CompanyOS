@@ -186,17 +186,17 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
         </div>
         <div className="list-stack">
           {boardTasks.slice(0, 8).map((task) => (
-            <div className="list-item" key={task.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.25rem" }}>
+            <div className="list-item task-board-item" key={task.id}>
+              <div className="task-board-main">
+                <div className="task-board-title">
                   <span className={`priority-badge ${task.priority}`}>{task.priority}</span>
                   <strong>{task.title}</strong>
                 </div>
-                <div className="muted" style={{ fontSize: "0.85rem" }}>
+                <div className="muted task-board-meta">
                   {task.project_name ?? "Company-wide"} · Assigned: {task.agent_name ?? "Unassigned"} · Status: {task.status}
                 </div>
               </div>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
+              <div className="task-board-actions">
                 <button
                   type="button"
                   className="refresh-button"
