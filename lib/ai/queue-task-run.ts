@@ -49,28 +49,35 @@ export async function queueTaskExecution(
   const status = isManual ? "awaiting_external" : "queued";
   const model = isManual ? "manual handoff" : null;
   const summary = isManual ? "Prompt ready for manual provider handoff." : "Queued for Codex CLI execution.";
+  // Every run carries the full task prompt, not just manual handoffs: the
+  // DB worker prefers input.prompt, and without it the run falls back to a
+  // bare title-only prompt that never names the agent's permitted proposal
+  // types — agents then improvise with tools the sandbox forbids (e.g. the
+  // built-in image tool, which dies on approval_policy="never") instead of
+  // proposing the matching CompanyOS tool.
+  const prompt = buildTaskPrompt(
+    {
+      title: args.title,
+      priority: args.priority,
+      project_name: null,
+      agent_name: agent.name,
+      agent_manager_name: null,
+      agent_role: agent.role,
+      agent_mission: agent.mission,
+      agent_description: agent.description,
+      agent_memory_scope: agent.memory_scope,
+      agent_allowed_actions: agent.allowed_actions,
+    },
+    {},
+  );
   const input = isManual
     ? {
         source: args.source,
         ...args.inputExtras,
-        prompt: buildTaskPrompt(
-          {
-            title: args.title,
-            priority: args.priority,
-            project_name: null,
-            agent_name: agent.name,
-            agent_manager_name: null,
-            agent_role: agent.role,
-            agent_mission: agent.mission,
-            agent_description: agent.description,
-            agent_memory_scope: agent.memory_scope,
-            agent_allowed_actions: agent.allowed_actions,
-          },
-          {},
-        ),
+        prompt,
         routing: { requested: agent.provider, manual: agent.provider },
       }
-    : { source: args.source, ...args.inputExtras };
+    : { source: args.source, ...args.inputExtras, prompt };
 
   await client.query(
     `INSERT INTO agent_runs (agent_id,task_id,provider,model,status,summary,input)

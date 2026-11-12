@@ -909,12 +909,16 @@ const generateImageTool: AgentTool = {
     const contentItemId = typeof payload.content_item_id === "string" && UUID_PATTERN.test(payload.content_item_id)
       ? payload.content_item_id
       : null;
-    if (generationPrompt.length < 3 || !projectId || !agentId) throw new Error("The approved image generation payload is invalid.");
+    if (generationPrompt.length < 3 || !agentId) throw new Error("The approved image generation payload is invalid.");
     // Same assignment guard as create_task: the generation must trace
-    // back to a run of this agent on a task in the same project.
+    // back to a run of this agent on a task in the same project. The
+    // project may be null: image requests are often company-wide or
+    // client work (e.g. an ad design) that belongs to no single project,
+    // so the guard compares with IS NOT DISTINCT FROM instead of
+    // requiring a project outright.
     const assignment = await client.query(
       `SELECT 1 FROM agent_runs r JOIN tasks t ON t.id=r.task_id
-       WHERE r.id=$1 AND r.agent_id=$2 AND t.project_id=$3 AND t.agent_id=$2`,
+       WHERE r.id=$1 AND r.agent_id=$2 AND t.project_id IS NOT DISTINCT FROM $3 AND t.agent_id=$2`,
       [runId, agentId, projectId],
     );
     if (!assignment.rowCount) throw new Error("The original task is no longer assigned to this agent in the same project.");
