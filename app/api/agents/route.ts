@@ -4,7 +4,7 @@ import { databaseAvailable, transaction } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-const actions = new Set(["request_task_creation", "request_task_status_change", "request_task_delegation", "request_financial_entry", "request_sales_lead", "request_email_outreach", "request_support_case_update", "request_wordpress_publish", "request_wordpress_manage"]);
+const actions = new Set(["request_task_creation", "request_task_status_change", "request_task_delegation", "request_financial_entry", "request_sales_lead", "request_email_outreach", "request_support_case_update", "request_wordpress_publish", "request_wordpress_manage", "request_proxmox_manage"]);
 const scopes = new Set(["project", "tasks", "systems", "sales", "support"]);
 const validProviders = new Set(["agnostic", "auto", "chatgpt-free", "claude-free", "codex", "codex-cli", "ollama", "openai", "anthropic"]);
 
@@ -56,6 +56,9 @@ export async function PATCH(request: Request) {
       }
       if (allowedActions.includes("request_sales_lead") && agent.name.toLowerCase() !== "sales") {
         return { status: 400 as const, error: "Lead proposals are available only to the Sales agent." };
+      }
+      if (allowedActions.includes("request_proxmox_manage") && agent.name.toLowerCase() !== "devops") {
+        return { status: 400 as const, error: "Proxmox management proposals are available only to the DevOps agent." };
       }
       if (allowedActions.includes("request_email_outreach") && (agent.name.toLowerCase() !== "sales" || !memoryScope.includes("sales"))) {
         return { status: 400 as const, error: "Email outreach requires the Sales agent and the explicitly enabled sales memory scope." };

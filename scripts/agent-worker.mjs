@@ -389,6 +389,89 @@ if (useDatabaseMode) {
                       }
                     }
                   }
+                  // Mirror manageProxmoxContainerTool in
+                  // lib/ai/tool-registry.ts: only the DevOps agent holding
+                  // request_proxmox_manage may propose Proxmox LXC
+                  // management, the run must be project-scoped, and fields
+                  // are bounded the same way before anything reaches
+                  // approvals. Payload shapes and approval labels match the
+                  // registry exactly so an approved row executes
+                  // identically in both modes. The action allowlist is the
+                  // same six actions; destructive operations do not exist
+                  // in either mode.
+                  const canManageProxmox = Array.isArray(task.agent_allowed_actions) && task.agent_allowed_actions.includes("request_proxmox_manage")
+                    && typeof task.agent_name === "string" && task.agent_name.toLowerCase() === "devops";
+                  if (canManageProxmox && task.project_id) {
+                    const pveInt = (value, min, max) => {
+                      const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+                      return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : undefined;
+                    };
+                    const pveNode = (value) => {
+                      const node = boundedText(value, 63);
+                      return /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/.test(node) ? node : "";
+                    };
+                    const pveSnapshotName = (value) => {
+                      const name = boundedText(value, 40);
+                      return /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name) && name.toLowerCase() !== "current" ? name : "";
+                    };
+                    const pveActions = new Set(["start", "shutdown", "stop", "reboot", "snapshot", "resize"]);
+                    const pveResizeParts = (cores, currentCores, memoryMb, currentMemoryMb, swapMb, currentSwapMb) => {
+                      const parts = [];
+                      if (cores !== undefined && currentCores !== undefined && cores !== currentCores) parts.push(`cores ${currentCores} → ${cores}`);
+                      if (memoryMb !== undefined && currentMemoryMb !== undefined && memoryMb !== currentMemoryMb) parts.push(`memory ${currentMemoryMb} MB → ${memoryMb} MB`);
+                      if (swapMb !== undefined && currentSwapMb !== undefined && swapMb !== currentSwapMb) parts.push(`swap ${currentSwapMb} MB → ${swapMb} MB`);
+                      return parts;
+                    };
+                    for (const [idx, prop] of parsed.proposed_actions.slice(0, 5).entries()) {
+                      if (prop?.type !== "manage_proxmox_container") continue;
+                      const reason = boundedText(prop?.reason, 500);
+                      const node = pveNode(prop.node);
+                      const vmid = pveInt(prop.vmid, 100, 999_999_999);
+                      const containerName = boundedText(prop.container_name, 120);
+                      const action = pveActions.has(prop.action) ? prop.action : undefined;
+                      if (!reason || !node || !vmid || !action) continue;
+                      const target = `LXC ${vmid}${containerName ? ` "${containerName}"` : ""} on ${node}`;
+                      let label = "";
+                      let payload = null;
+                      if (action === "snapshot") {
+                        const snapshotName = pveSnapshotName(prop.snapshot_name);
+                        if (!snapshotName) continue;
+                        label = `Snapshot Proxmox ${target} as "${snapshotName}"`;
+                        payload = { node, vmid, container_name: containerName, action, snapshot_name: snapshotName };
+                      } else if (action === "resize") {
+                        const cores = pveInt(prop.cores, 1, 64);
+                        const memoryMb = pveInt(prop.memory_mb, 128, 131072);
+                        const swapMb = pveInt(prop.swap_mb, 0, 65536);
+                        const currentCores = pveInt(prop.current_cores, 1, 64);
+                        const currentMemoryMb = pveInt(prop.current_memory_mb, 128, 131072);
+                        const currentSwapMb = pveInt(prop.current_swap_mb, 0, 65536);
+                        const anyChange = cores !== undefined || memoryMb !== undefined || swapMb !== undefined;
+                        const missingBefore = (cores !== undefined && currentCores === undefined)
+                          || (memoryMb !== undefined && currentMemoryMb === undefined)
+                          || (swapMb !== undefined && currentSwapMb === undefined);
+                        const parts = pveResizeParts(cores, currentCores, memoryMb, currentMemoryMb, swapMb, currentSwapMb);
+                        if (!anyChange || missingBefore || !parts.length) continue;
+                        label = `Resize Proxmox ${target}: ${parts.join("; ")}`;
+                        payload = {
+                          node, vmid, container_name: containerName, action,
+                          ...(cores !== undefined && cores !== currentCores ? { cores, current_cores: currentCores } : {}),
+                          ...(memoryMb !== undefined && memoryMb !== currentMemoryMb ? { memory_mb: memoryMb, current_memory_mb: currentMemoryMb } : {}),
+                          ...(swapMb !== undefined && swapMb !== currentSwapMb ? { swap_mb: swapMb, current_swap_mb: currentSwapMb } : {}),
+                        };
+                      } else {
+                        const verb = action === "start" ? "Start" : action === "shutdown" ? "Shut down" : action === "stop" ? "Stop" : "Reboot";
+                        label = `${verb} Proxmox ${target}`;
+                        payload = { node, vmid, container_name: containerName, action };
+                      }
+                      await pool.query(
+                        `INSERT INTO approvals (project_id,requested_by,action,risk_level,reason,agent_run_id,agent_id,action_type,proposal_index,payload)
+                         VALUES ($1,$2,$3,'high',$4,$5,$6,'manage_proxmox_container',$7,$8::jsonb)
+                         ON CONFLICT (agent_run_id,proposal_index) WHERE agent_run_id IS NOT NULL AND proposal_index IS NOT NULL DO NOTHING`,
+                        [task.project_id, task.agent_name ?? "Agent", label, reason, claimed.id, task.agent_id, idx, JSON.stringify(payload)],
+                      );
+                      proposalCount += 1;
+                    }
+                  }
                   // Mirror createContentItemTool in lib/ai/tool-registry.ts:
                   // only agents that hold request_content_item may propose
                   // planner content, the run must be project-scoped, and

@@ -400,6 +400,16 @@ WHERE LOWER(name) IN ('engineer', 'designer', 'graphics', 'marketing') AND NOT (
 UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_content_item"]'::jsonb
 WHERE LOWER(name)='marketing' AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_content_item');
 
+-- Allow DevOps — and only DevOps — to propose Proxmox LXC management
+-- (Proxmox agent-access pack): start, shutdown, stop, reboot, snapshot,
+-- and config resize. This is a separate permission from the read-only
+-- Proxmox status sync on purpose — container power and config changes
+-- carry a higher blast radius, so the owner grants them deliberately.
+-- Every action still needs owner approval, and the tool enforces a fixed
+-- action allowlist: destructive operations do not exist in the tool.
+UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_proxmox_manage"]'::jsonb
+WHERE LOWER(name)='devops' AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_proxmox_manage');
+
 -- Lead Desk Phase 3: outcome log + first-response timing per lead. Outcomes
 -- are the one-tap result reports (contacted / visit / quote / won / lost);
 -- first_contacted_at powers the Results first-response KPI.
