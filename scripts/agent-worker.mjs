@@ -1,5 +1,5 @@
-import { readFile, mkdtemp, rm } from "node:fs/promises";
-import { resolve, join } from "node:path";
+import { readFile, readdir, stat, mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { resolve, join, extname } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -157,6 +157,194 @@ async function runCodexPrompt(prompt) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Image-generation bridge (mirror of generateImageTool in
+// lib/ai/tool-registry.ts). An owner-approved generate_image proposal queues
+// a normal execution task whose run input carries an image_generation spec.
+// When this worker claims such a run in database mode, execution is
+// DETERMINISTIC — no model session is involved: the worker itself spawns
+// the imagegen skill's CLI fallback (scripts/image_gen.py, GPT Image
+// models) with a JSONL batch of the approved prompt, collects the image
+// files from the run's output directory, and uploads each one to the app's
+// server endpoint. The skill's built-in image_gen tool is NOT used: it is
+// unavailable in headless sessions (verified on this host), and the CLI
+// requires OPENAI_API_KEY in this worker's own environment. WordPress
+// credentials live on the server and are never present here.
+// ---------------------------------------------------------------------------
+const IMAGE_GENERATION_PURPOSES = new Set(["social post", "website", "other"]);
+const IMAGE_GENERATION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const GENERATED_IMAGE_TYPES = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif" };
+const MAX_GENERATED_IMAGE_BYTES = 10 * 1024 * 1024;
+
+function parseImageGenerationSpec(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const prompt = boundedText(raw.prompt, 1000);
+  if (prompt.length < 3) return null;
+  const count = Number.isInteger(raw.count) && raw.count >= 1 && raw.count <= 4 ? raw.count : 3;
+  const purpose = IMAGE_GENERATION_PURPOSES.has(raw.purpose) ? raw.purpose : "other";
+  const contentItemId = typeof raw.content_item_id === "string" && IMAGE_GENERATION_UUID.test(raw.content_item_id) ? raw.content_item_id : null;
+  return { prompt, count, purpose, contentItemId };
+}
+
+async function collectImageFiles(directory, { depth = 0 } = {}) {
+  if (!directory || depth > 4) return [];
+  let entries = [];
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files = [];
+  for (const entry of entries) {
+    const full = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await collectImageFiles(full, { depth: depth + 1 }));
+    } else if (entry.isFile()) {
+      const contentType = GENERATED_IMAGE_TYPES[extname(entry.name).toLowerCase()];
+      if (!contentType) continue;
+      const info = await stat(full).catch(() => null);
+      if (!info) continue;
+      files.push({ path: full, name: entry.name, contentType, mtimeMs: info.mtimeMs });
+    }
+  }
+  return files;
+}
+
+function spawnImageGenCli(script, args) {
+  return new Promise((resolveRun, rejectRun) => {
+    // Only the environment the CLI itself needs: interpreter paths, the
+    // Codex home (for skill-relative config), and the OpenAI key. The key
+    // is passed to the child process only — never logged or returned.
+    const env = Object.fromEntries(
+      Object.entries({
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        USER: process.env.USER,
+        CODEX_HOME: process.env.CODEX_HOME,
+        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+        TEMP: process.env.TEMP,
+        TMP: process.env.TMP,
+        TERM: "dumb",
+      }).filter(([, value]) => value !== undefined),
+    );
+    const child = spawn("python3", [script, ...args], { env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, 240_000);
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      if (stdout.length < 5000) stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      if (stderr.length < 5000) stderr += chunk;
+    });
+    child.on("error", (err) => {
+      clearTimeout(timeout);
+      rejectRun(new Error(`Failed to start the imagegen CLI: ${err.message}`));
+    });
+    child.on("close", (code) => {
+      clearTimeout(timeout);
+      if (timedOut) return rejectRun(new Error("Image generation CLI timed out after 240s."));
+      if (code !== 0) {
+        const errDetail = stderr.trim() ? `: ${stderr.trim().slice(-300)}` : "";
+        return rejectRun(new Error(`Image generation CLI exited with code ${code}${errDetail}`));
+      }
+      resolveRun();
+    });
+  });
+}
+
+// Runs the imagegen CLI for one approved spec: one JSONL job per requested
+// variation of the same prompt, written into a fresh output directory the
+// worker then collects. Generation gets a 240s budget (inside the 5-minute
+// worker lease the claim sweeps use).
+async function runImageGenerationCli(spec) {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is not configured on the worker.");
+  }
+  const codexHome = process.env.CODEX_HOME || (process.env.HOME ? join(process.env.HOME, ".codex") : "");
+  const script = codexHome ? join(codexHome, "skills", ".system", "imagegen", "scripts", "image_gen.py") : "";
+  if (!script || !(await stat(script).catch(() => null))) {
+    throw new Error("The imagegen CLI (skills/.system/imagegen/scripts/image_gen.py) was not found on the worker.");
+  }
+  const workspace = await mkdtemp(join(tmpdir(), "companyos-worker-images-"));
+  try {
+    const outDir = join(workspace, "output");
+    await mkdir(outDir, { recursive: true });
+    const inputPath = join(workspace, "prompts.jsonl");
+    const jobs = Array.from({ length: spec.count }, () => JSON.stringify({ prompt: spec.prompt }));
+    await writeFile(inputPath, `${jobs.join("\n")}\n`, "utf8");
+    await spawnImageGenCli(script, ["generate-batch", "--input", inputPath, "--out-dir", outDir, "--force"]);
+    const found = await collectImageFiles(outDir);
+    const files = [];
+    for (const candidate of found.sort((a, b) => a.mtimeMs - b.mtimeMs)) {
+      const data = await readFile(candidate.path).catch(() => null);
+      if (!data?.length || data.length > MAX_GENERATED_IMAGE_BYTES) continue;
+      files.push({ name: candidate.name, contentType: candidate.contentType, data });
+    }
+    return { files };
+  } finally {
+    await rm(workspace, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function uploadGeneratedImage(file, spec) {
+  const baseUrl = (process.env.APP_URL || "http://127.0.0.1:3000").replace(/\/$/, "");
+  const headers = { "Content-Type": "application/json" };
+  if (process.env.COMPANYOS_ADMIN_TOKEN) headers.Authorization = `Bearer ${process.env.COMPANYOS_ADMIN_TOKEN}`;
+  const response = await fetch(`${baseUrl}/api/content/images/upload`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      filename: file.name,
+      content_type: file.contentType,
+      data_base64: file.data.toString("base64"),
+      ...(spec.contentItemId ? { content_item_id: spec.contentItemId } : {}),
+    }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!response.ok) throw new Error(`Image upload failed (HTTP ${response.status}).`);
+  const result = await response.json().catch(() => null);
+  if (!result?.url) throw new Error("Image upload returned no URL.");
+  return result.url;
+}
+
+async function executeImageGenerationRun(pool, claimed, task, spec) {
+  try {
+    console.log(`[Worker] Generating image(s) for run ${claimed.id}: "${spec.prompt.slice(0, 80)}"...`);
+    const generated = await runImageGenerationCli(spec);
+    if (!generated.files.length) throw new Error("Image generation produced no image files.");
+    const urls = [];
+    for (const file of generated.files.slice(0, spec.count)) {
+      urls.push(await uploadGeneratedImage(file, spec));
+    }
+    if (!urls.length) throw new Error("Image generation produced no image files.");
+    const summary = `Generated ${urls.length} image variation(s): ${urls.join(", ")}`;
+    await pool.query(
+      "UPDATE agent_runs SET provider='codex-cli',model=$2,status='completed',summary=$3,result=$4::jsonb,completed_at=NOW() WHERE id=$1",
+      [claimed.id, "imagegen CLI · GPT Image", summary.slice(0, 500), JSON.stringify({ text: summary, image_urls: urls, image_generation: spec })],
+    );
+    await pool.query("UPDATE workflow_dispatches SET status='completed' WHERE agent_run_id=$1", [claimed.id]);
+    await pool.query(
+      "INSERT INTO events (source,event_type,title,severity,payload) VALUES ('agent-worker','image_generation_completed',$1,'info',$2::jsonb)",
+      [`Image generation completed on VM: ${task.title}`, JSON.stringify({ run_id: claimed.id, task_id: task.id, image_urls: urls, content_item_id: spec.contentItemId })],
+    );
+    console.log(`[Worker] ✓ Image generation run ${claimed.id} finished (${urls.length} image(s) uploaded).`);
+  } catch (err) {
+    console.error(`[Worker] ✗ Image generation failed for run ${claimed.id}:`, err.message);
+    await pool.query(
+      "UPDATE agent_runs SET status='failed',error=$2,summary='Image generation failed on VM.',completed_at=NOW() WHERE id=$1",
+      [claimed.id, err.message.slice(0, 400)],
+    );
+    await pool.query("UPDATE workflow_dispatches SET status='failed' WHERE agent_run_id=$1", [claimed.id]);
+  }
+}
+
 // Database direct mode (opt-in via COMPANYOS_WORKER_MODE=db; see above)
 if (useDatabaseMode) {
   // SSL rule mirrors resolveDatabaseSsl in lib/db-ssl.ts (this standalone
@@ -250,6 +438,7 @@ if (useDatabaseMode) {
            LEFT JOIN agents manager ON manager.id=a.reports_to WHERE t.id=$1`, [claimed.task_id],
         );
         const task = taskRes.rows[0];
+        const imageSpec = parseImageGenerationSpec(claimed.input?.image_generation);
 
         if (!task || task.status === "done" || !task.agent_id) {
           await pool.query(
@@ -257,6 +446,11 @@ if (useDatabaseMode) {
             [claimed.id],
           );
           console.log(`[Worker] Run ${claimed.id} failed: task missing or complete.`);
+        } else if (imageSpec) {
+          // Image-generation bridge: this run exists only to generate the
+          // owner-approved image(s) in its input spec; the dedicated
+          // branch generates, uploads, and finalizes the run itself.
+          await executeImageGenerationRun(pool, claimed, task, imageSpec);
         } else {
           // Construct prompt, preferring existing input prompt if available
           const role = task.agent_name ? `${task.agent_name}${task.agent_role ? ` (${task.agent_role})` : ""}` : "CompanyOS task agent";
@@ -493,6 +687,33 @@ if (useDatabaseMode) {
                        VALUES ($1,$2,$3,'medium',$4,$5,$6,'create_content_item',$7,$8::jsonb)
                        ON CONFLICT (agent_run_id,proposal_index) WHERE agent_run_id IS NOT NULL AND proposal_index IS NOT NULL DO NOTHING`,
                       [task.project_id, task.agent_name ?? "Agent", `Add to content planner (${contentType}): ${title}`, reason, claimed.id, task.agent_id, idx, JSON.stringify({ title, content_type: contentType, caption, image_prompt: imagePrompt, scheduled_for: scheduledFor })],
+                    );
+                    proposalCount += 1;
+                  }
+                  // Mirror generateImageTool in lib/ai/tool-registry.ts:
+                  // EVERY agent holding request_image_generation may
+                  // propose image generation (no role restriction), the
+                  // run must be project-scoped, and fields are bounded
+                  // the same way before anything reaches approvals.
+                  // Payload shape and approval label match the registry
+                  // exactly so an approved row executes identically in
+                  // both modes.
+                  const canGenerateImages = Array.isArray(task.agent_allowed_actions) && task.agent_allowed_actions.includes("request_image_generation");
+                  const imagePurposes = new Set(["social post", "website", "other"]);
+                  for (const [idx, prop] of parsed.proposed_actions.slice(0, 5).entries()) {
+                    if (prop?.type !== "generate_image" || !canGenerateImages || !task.project_id) continue;
+                    const promptText = boundedText(prop.prompt, 1000);
+                    const reason = boundedText(prop.reason, 500);
+                    const count = Number.isInteger(prop.count) && prop.count >= 1 && prop.count <= 4 ? prop.count : 3;
+                    const purpose = imagePurposes.has(prop.purpose) ? prop.purpose : "other";
+                    const contentItemId = typeof prop.content_item_id === "string" && IMAGE_GENERATION_UUID.test(prop.content_item_id) ? prop.content_item_id : null;
+                    if (prop.content_item_id && !contentItemId) continue;
+                    if (promptText.length < 3 || reason.length < 8) continue;
+                    await pool.query(
+                      `INSERT INTO approvals (project_id,requested_by,action,risk_level,reason,agent_run_id,agent_id,action_type,proposal_index,payload)
+                       VALUES ($1,$2,$3,'high',$4,$5,$6,'generate_image',$7,$8::jsonb)
+                       ON CONFLICT (agent_run_id,proposal_index) WHERE agent_run_id IS NOT NULL AND proposal_index IS NOT NULL DO NOTHING`,
+                      [task.project_id, task.agent_name ?? "Agent", `Generate image (×${count}, ${purpose}): ${promptText.slice(0, 120)}`, reason, claimed.id, task.agent_id, idx, JSON.stringify({ prompt: promptText, count, purpose, content_item_id: contentItemId })],
                     );
                     proposalCount += 1;
                   }

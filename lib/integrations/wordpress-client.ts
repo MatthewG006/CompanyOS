@@ -99,6 +99,14 @@ export type WordPressPageInput = {
   status?: "draft" | "publish" | "pending" | "private";
 };
 
+export type WordPressMediaBytesInput = {
+  bytes: ArrayBuffer | Uint8Array;
+  filename: string;
+  contentType: string;
+  title?: string;
+  altText?: string;
+};
+
 export type WordPressMenuItemInput = {
   title: string;
   url: string;
@@ -220,6 +228,55 @@ export function createWordPressClient(credentials: WordPressCredentials, fetchFn
     return (await response.json()) as T;
   }
 
+  /**
+   * Shared binary media POST for both upload paths (URL-downloaded and
+   * caller-supplied bytes): posts the raw bytes to /wp-json/wp/v2/media
+   * with a Content-Disposition filename, then applies the optional title
+   * and alt text with a metadata update, exactly as the original
+   * URL-based upload always did.
+   */
+  async function postMediaBytes(
+    bytes: ArrayBuffer | Uint8Array,
+    filename: string,
+    contentType: string,
+    title?: string,
+    altText?: string,
+  ): Promise<WordPressMedia> {
+    const response = await fetchFn(`${base}/wp-json/wp/v2/media`, {
+      method: "POST",
+      headers: {
+        Authorization: authorization,
+        Accept: "application/json",
+        "Content-Type": contentType,
+        "Content-Disposition": `attachment; filename="${filename}"`,
+      },
+      body: bytes as BodyInit,
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      let message = `WordPress REST API responded with status ${response.status}.`;
+      try {
+        const data = (await response.json()) as { message?: unknown };
+        if (typeof data.message === "string" && data.message) message = data.message;
+      } catch {
+        // Keep the status-based message.
+      }
+      throw new WordPressApiError(response.status, "", message);
+    }
+    let media = toMedia((await response.json()) as Record<string, unknown>);
+    if (title || altText) {
+      const updated = await request<Record<string, unknown>>(`/wp-json/wp/v2/media/${media.id}`, {
+        method: "POST",
+        body: JSON.stringify({
+          ...(title ? { title } : {}),
+          ...(altText ? { alt_text: altText } : {}),
+        }),
+      });
+      media = toMedia(updated);
+    }
+    return media;
+  }
+
   return {
     async getMe(): Promise<WordPressMe> {
       const data = await request<Record<string, unknown>>("/wp-json/wp/v2/users/me?context=edit");
@@ -308,40 +365,25 @@ export function createWordPressClient(credentials: WordPressCredentials, fetchFn
       if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error("The media source exceeds the 25 MB upload limit.");
       const contentType = download.headers.get("content-type")?.split(";")[0].trim() || "application/octet-stream";
       const filename = mediaFilename(source, contentType);
+      return postMediaBytes(bytes, filename, contentType, input.title, input.altText);
+    },
 
-      const response = await fetchFn(`${base}/wp-json/wp/v2/media`, {
-        method: "POST",
-        headers: {
-          Authorization: authorization,
-          Accept: "application/json",
-          "Content-Type": contentType,
-          "Content-Disposition": `attachment; filename="${filename}"`,
-        },
-        body: bytes,
-        cache: "no-store",
-      });
-      if (!response.ok) {
-        let message = `WordPress REST API responded with status ${response.status}.`;
-        try {
-          const data = (await response.json()) as { message?: unknown };
-          if (typeof data.message === "string" && data.message) message = data.message;
-        } catch {
-          // Keep the status-based message.
-        }
-        throw new WordPressApiError(response.status, "", message);
-      }
-      let media = toMedia((await response.json()) as Record<string, unknown>);
-      if (input.title || input.altText) {
-        const updated = await request<Record<string, unknown>>(`/wp-json/wp/v2/media/${media.id}`, {
-          method: "POST",
-          body: JSON.stringify({
-            ...(input.title ? { title: input.title } : {}),
-            ...(input.altText ? { alt_text: input.altText } : {}),
-          }),
-        });
-        media = toMedia(updated);
-      }
-      return media;
+    /**
+     * Byte-based media upload (image-generation bridge): the caller
+     * already holds the image bytes — e.g. the server endpoint that
+     * receives a generated image from the agent worker — so there is no
+     * source URL to download. The bytes go straight to the media library
+     * with the same binary POST and optional title/alt-text update as the
+     * URL path; size validation is the caller's job before this call and
+     * is re-checked here against the same cap.
+     */
+    async uploadMediaBytes(input: WordPressMediaBytesInput): Promise<WordPressMedia> {
+      const size = input.bytes.byteLength;
+      if (!size) throw new Error("The media upload is empty.");
+      if (size > MAX_MEDIA_BYTES) throw new Error("The media source exceeds the 25 MB upload limit.");
+      const filename = input.filename.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120);
+      if (!filename.includes(".")) throw new Error("The media filename must include an extension.");
+      return postMediaBytes(input.bytes, filename, input.contentType, input.title, input.altText);
     },
 
     async getSettings(): Promise<WordPressSettings> {

@@ -130,6 +130,23 @@ export async function uploadWordPressMedia(input: {
   return client.uploadMediaFromUrl(input);
 }
 
+/**
+ * Upload image bytes the server already holds (image-generation bridge:
+ * generated images arrive at the upload endpoint as bytes, never as a
+ * URL the server would have to fetch). Credentials stay in this adapter;
+ * callers only ever see the public media record back.
+ */
+export async function uploadWordPressMediaBytes(input: {
+  bytes: Uint8Array;
+  filename: string;
+  contentType: string;
+  title?: string;
+  altText?: string;
+}): Promise<WordPressMedia> {
+  const client = await wordpressClient();
+  return client.uploadMediaBytes(input);
+}
+
 /** Apply the rebuild-critical subset of site settings (see the tool). */
 export async function updateWordPressSiteSettings(update: WordPressSettingsUpdate) {
   const client = await wordpressClient();

@@ -410,6 +410,17 @@ WHERE LOWER(name)='marketing' AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? '
 UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_proxmox_manage"]'::jsonb
 WHERE LOWER(name)='devops' AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_proxmox_manage');
 
+-- Allow every agent to propose image generation (image-generation bridge
+-- pack): the agent proposes an image prompt, the owner approves it, and a
+-- queued run on the Codex worker generates the variations with the
+-- imagegen skill. Unlike the role-scoped grants above this one is
+-- deliberately universal — any role may need a visual for a website or a
+-- social post — and the surface is propose-only: generated images land
+-- as design-studio options or run-result URLs for the owner to pick
+-- from, so nothing generated is ever published by the tool itself.
+UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_image_generation"]'::jsonb
+WHERE NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_image_generation');
+
 -- Lead Desk Phase 3: outcome log + first-response timing per lead. Outcomes
 -- are the one-tap result reports (contacted / visit / quote / won / lost);
 -- first_contacted_at powers the Results first-response KPI.

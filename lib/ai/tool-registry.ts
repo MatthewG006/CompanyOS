@@ -63,6 +63,10 @@ type AgentActionRequest = {
   currentCores?: number;
   currentMemoryMb?: number;
   currentSwapMb?: number;
+  generationPrompt?: string;
+  imageCount?: number;
+  contentItemId?: string;
+  purpose?: "social post" | "website" | "other";
 };
 
 const CONTENT_TYPES = new Set(["post", "reel", "story", "article"]);
@@ -863,7 +867,102 @@ const createContentItemTool: AgentTool = {
   },
 };
 
+const IMAGE_PURPOSES = new Set(["social post", "website", "other"]);
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const generateImageTool: AgentTool = {
+  actionType: "generate_image",
+  permission: "request_image_generation",
+  parseProposal(value) {
+    const reason = boundedText(value.reason, 500);
+    const generationPrompt = boundedText(value.prompt, 1000);
+    const imageCount = boundedInt(value.count, 1, 4) ?? 3;
+    const purpose = typeof value.purpose === "string" && IMAGE_PURPOSES.has(value.purpose)
+      ? value.purpose as AgentActionRequest["purpose"]
+      : "other";
+    const contentItemId = typeof value.content_item_id === "string" && UUID_PATTERN.test(value.content_item_id)
+      ? value.content_item_id
+      : undefined;
+    // A proposal that names a content item with a malformed id is invalid
+    // rather than silently unattached: the owner approves what they see.
+    if (value.content_item_id !== undefined && value.content_item_id !== null && value.content_item_id !== "" && !contentItemId) return null;
+    return value.type === "generate_image" && generationPrompt.length >= 3 && reason.length >= 8
+      ? { reason, generationPrompt, imageCount, purpose, ...(contentItemId ? { contentItemId } : {}) }
+      : null;
+  },
+  approvalPayload(value) {
+    return {
+      prompt: value.generationPrompt,
+      count: value.imageCount ?? 3,
+      purpose: value.purpose ?? "other",
+      content_item_id: value.contentItemId ?? null,
+    };
+  },
+  approvalLabel(value) {
+    return `Generate image (×${value.imageCount ?? 3}, ${value.purpose ?? "other"}): ${(value.generationPrompt ?? "").slice(0, 120)}`;
+  },
+  async execute(client, projectId, agentId, rawPayload, runId) {
+    const payload = rawPayload && typeof rawPayload === "object" ? rawPayload as Record<string, unknown> : {};
+    const generationPrompt = boundedText(payload.prompt, 1000);
+    const imageCount = boundedInt(payload.count, 1, 4) ?? 3;
+    const purpose = typeof payload.purpose === "string" && IMAGE_PURPOSES.has(payload.purpose) ? payload.purpose : "other";
+    const contentItemId = typeof payload.content_item_id === "string" && UUID_PATTERN.test(payload.content_item_id)
+      ? payload.content_item_id
+      : null;
+    if (generationPrompt.length < 3 || !projectId || !agentId) throw new Error("The approved image generation payload is invalid.");
+    // Same assignment guard as create_task: the generation must trace
+    // back to a run of this agent on a task in the same project.
+    const assignment = await client.query(
+      `SELECT 1 FROM agent_runs r JOIN tasks t ON t.id=r.task_id
+       WHERE r.id=$1 AND r.agent_id=$2 AND t.project_id=$3 AND t.agent_id=$2`,
+      [runId, agentId, projectId],
+    );
+    if (!assignment.rowCount) throw new Error("The original task is no longer assigned to this agent in the same project.");
+    if (contentItemId) {
+      const item = await client.query("SELECT 1 FROM content_items WHERE id=$1 AND project_id=$2", [contentItemId, projectId]);
+      if (!item.rowCount) throw new Error("The content item named in the approved image proposal no longer exists in this project.");
+    }
+    // Nothing is generated here: generation happens on the worker host,
+    // where the worker runs the imagegen CLI (GPT Image models) for the
+    // queued run. Approval queues a normal execution task for the same
+    // agent; the queued run's input carries the image_generation spec
+    // the worker reads, and the generated URLs come back in that run's
+    // result (and in the content item's design-studio options when one
+    // is named).
+    const title = boundedText(`Generate image: ${generationPrompt}`, 200);
+    const result = await client.query<{ id: string }>(
+      `INSERT INTO tasks (project_id,agent_id,title,priority,status) VALUES ($1,$2,$3,'normal','todo') RETURNING id`,
+      [projectId, agentId, title],
+    );
+    const taskId = result.rows[0].id;
+    await queueTaskExecution(client, {
+      projectId,
+      agentId,
+      taskId,
+      title,
+      priority: "normal",
+      source: "owner_approved_image_generation",
+      inputExtras: {
+        image_generation: {
+          prompt: generationPrompt,
+          count: imageCount,
+          purpose,
+          content_item_id: contentItemId,
+          requested_by_run_id: runId,
+        },
+      },
+    });
+    await client.query(
+      `INSERT INTO events (source,event_type,title,severity,project_id,payload)
+       VALUES ('images','image_generation_queued','Image generation queued for the Codex worker','info',$1,$2::jsonb)`,
+      [projectId, JSON.stringify({ task_id: taskId, content_item_id: contentItemId, count: imageCount, purpose, agent_run_id: runId, agent_id: agentId })],
+    );
+    return taskId;
+  },
+};
+
 const registry = new Map<string, AgentTool>([
+  [generateImageTool.actionType, generateImageTool],
   [createContentItemTool.actionType, createContentItemTool],
   [createTaskTool.actionType, createTaskTool],
   [updateTaskStatusTool.actionType, updateTaskStatusTool],
