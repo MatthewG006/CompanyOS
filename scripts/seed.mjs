@@ -61,6 +61,10 @@ for (const row of agents) {
   const allowedActions = [
     "request_task_creation",
     "request_task_status_change",
+    // Image generation is granted to every agent (image-generation bridge
+    // pack): any role may propose a prompt for a post or website visual;
+    // the owner approves before the worker generates anything.
+    "request_image_generation",
     ...(row[0] === "Finance" ? ["request_financial_entry"] : []),
     ...(row[0] === "Sales" ? ["request_sales_lead"] : []),
     ...(["Engineer", "Designer", "Graphics", "Marketing"].includes(row[0]) ? ["request_wordpress_publish"] : []),
