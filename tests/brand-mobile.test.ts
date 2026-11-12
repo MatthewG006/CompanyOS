@@ -101,3 +101,39 @@ test("the demo brand kit for Sky Mountain Graphics carries the real logo colors"
   const data = read("lib/data.ts");
   assert.match(data, /"#4196b3", "#54c9ea", "#ffffff"/, "Graphics demo kit must use the sampled logo palette");
 });
+
+test("mobile lists wrap long unbroken text instead of cutting it off", () => {
+  const styles = css();
+  // Overview recent events / priority tasks / attention queue rows.
+  assert.match(styles, /\.list-item > div \{ min-width: 0; \}/, "list text cells must be allowed to shrink");
+  assert.match(styles, /\.list-item strong \{ overflow-wrap: anywhere; \}/, "list titles must wrap anywhere");
+  assert.match(styles, /\.list-item \.muted \{ overflow-wrap: anywhere; \}/, "list meta lines must wrap anywhere");
+  // AI Workforce run history: titles, summaries and errors wrap too.
+  assert.match(styles, /\.run-heading strong \{ overflow-wrap:anywhere; \}/, "run titles must wrap anywhere");
+  assert.match(styles, /\.workflow-summary \{ overflow-wrap:anywhere; \}/, "run summaries must wrap anywhere");
+  assert.match(styles, /\.run-error \{[^}]*overflow-wrap:anywhere; \}/, "run errors must wrap anywhere");
+  assert.match(styles, /\.agent-row span \{ overflow-wrap: anywhere; \}/, "agent memory/proposal lines must wrap anywhere");
+});
+
+test("the workforce tab stacks cleanly on phones", () => {
+  const styles = css();
+  assert.match(styles, /\.agent-row \{ grid-template-columns: 1fr; gap: 6px; \}/, "agent rows must become single-column cards on phones");
+  assert.match(styles, /\.run-heading \{ flex-direction: column; gap: 6px; \}/, "run headings must stack on phones");
+  assert.match(styles, /\.run-stats \{ display:grid; grid-template-columns:repeat\(6,minmax\(0,1fr\)\);/, "run stats must fit all six totals");
+  assert.match(styles, /\.run-stats \{ grid-template-columns: repeat\(3, minmax\(0,1fr\)\); \}/, "run stats must go three-up on tablets");
+  assert.match(styles, /\.task-board-item \{ flex-direction: column; align-items: stretch; \}/, "open tasks must stack on phones");
+  const console_ = read("app/agents/AgentConsole.tsx");
+  assert.ok(console_.includes("task-board-item"), "AgentConsole open tasks must use the task-board classes, not inline flex styles");
+});
+
+test("agent status is derived from live runs so the working light is real", () => {
+  const data = read("lib/data.ts");
+  assert.ok(
+    data.includes("FILTER (WHERE r.status='running') > 0 THEN 'working'"),
+    "sliceAgents must report 'working' while one of the agent's runs is executing",
+  );
+  assert.ok(
+    data.includes("FILTER (WHERE r.status='queued') > 0 THEN 'queued'"),
+    "sliceAgents must report 'queued' while one of the agent's runs waits",
+  );
+});

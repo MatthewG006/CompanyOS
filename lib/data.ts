@@ -163,7 +163,14 @@ async function sliceProjects(): Promise<Project[]> {
 
 async function sliceAgents(): Promise<Agent[]> {
   if ((await dbSource()) === "demo") return demoAgents;
-  return (await query<Agent>(`SELECT a.id,a.name,a.role,a.department,a.reports_to,manager.name AS manager_name,a.provider,a.status,a.description,a.mission,
+  return (await query<Agent>(`SELECT a.id,a.name,a.role,a.department,a.reports_to,manager.name AS manager_name,a.provider,
+      -- Live status: the stored agents.status never changes on its own, so
+      -- derive the displayed status from the agent's runs — 'working'
+      -- while a run is executing, 'queued' while one waits — falling back
+      -- to the stored status when nothing is in flight.
+      CASE WHEN COUNT(DISTINCT r.id) FILTER (WHERE r.status='running') > 0 THEN 'working'
+           WHEN COUNT(DISTINCT r.id) FILTER (WHERE r.status='queued') > 0 THEN 'queued'
+           ELSE a.status END AS status,a.description,a.mission,
       a.allowed_actions,a.prohibited_actions,a.escalation_rules,a.success_metrics,a.memory_scope,
       COUNT(DISTINCT t.id) FILTER (WHERE t.status NOT IN ('done', 'completed'))::int AS open_task_count,
       COUNT(DISTINCT t.id) FILTER (WHERE t.status IN ('done', 'completed'))::int AS completed_task_count,
