@@ -124,11 +124,15 @@ test("runs for WordPress-managing agents are queued with current page context", 
   assert.match(context, /listWordPressPageIndex\(\)/);
   assert.match(context, /Promise\.allSettled/);
   assert.match(context, /CONTEXT_TIMEOUT_MS = 20_000/);
+  // Full pages, not excerpts: an excerpted page cannot be edited
+  // faithfully, so the cap covers a whole real page body.
+  assert.match(context, /MAX_PAGE_CONTENT_CHARS = 12_000/);
 });
 
 test("the prompt teaches template, scoped style, contrast, and image expectations", () => {
   const router = read("../lib/ai/router.ts");
-  assert.match(router, /wordpress\.targeted_pages/);
+  assert.match(router, /Current WordPress page content \(verbatim from the live site/);
+  assert.match(router, /memoryForJson/);
   assert.match(router, /Include "template" to set the page template/);
   assert.match(router, /prefix every selector with your content\\?'s outermost wrapper class/);
   assert.match(router, /white-on-white text invisible/);
