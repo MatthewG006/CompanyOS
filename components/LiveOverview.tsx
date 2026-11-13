@@ -5,6 +5,7 @@ import { usePolling } from "./usePolling";
 import type { DashboardData } from "@/lib/types";
 import { ApprovalList } from "./ApprovalList";
 import { AskCompanyOS } from "./AskCompanyOS";
+import { MechanicPanel } from "./MechanicPanel";
 import { DemoBanner } from "./DemoBanner";
 import { MetricCard } from "./MetricCard";
 import { ProjectCard } from "./ProjectCard";
@@ -83,6 +84,8 @@ export function LiveOverview({ initial }: { initial: DashboardData }) {
     </section>
 
     <AskCompanyOS />
+
+    <MechanicPanel />
 
     <section className="section-block">
       <div className="section-title-row"><div><h2>Connected data</h2><p>Normalized external records currently cached by CompanyOS.</p></div><div className="data-source">{data.external_summary.total} RECORDS</div></div>
