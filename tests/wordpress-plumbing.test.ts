@@ -114,7 +114,8 @@ test("runs for WordPress-managing agents are queued with current page context", 
   assert.match(queue, /request_wordpress_manage/);
   const context = read("../lib/ai/wordpress-context.ts");
   assert.match(context, /MAX_TARGETED_PAGES = 2/);
-  assert.match(context, /targetedPageIds/);
+  assert.match(context, /pageIdCandidates/);
+  assert.match(context, /slugTargetIds/);
   // The loader must never fail the queue.
   assert.match(context, /catch \{\s*\n\s*return null;/);
   // Speed guards from the first live test: the host answers slowly,

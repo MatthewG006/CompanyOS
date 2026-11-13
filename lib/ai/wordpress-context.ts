@@ -37,24 +37,38 @@ export type WordPressRunContext = {
   }>;
 };
 
-function targetedPageIds(title: string, pages: Array<{ id: number; slug: string }>): number[] {
+function pageIdCandidates(title: string): number[] {
   const ids: number[] = [];
   const lower = title.toLowerCase();
   const idPatterns = [/(?:page_id|page id|page)\s*#?\s*(\d{1,9})/gi, /#(\d{1,9})\b/g];
   for (const pattern of idPatterns) {
     for (const match of lower.matchAll(pattern)) {
       const id = Number(match[1]);
-      if (pages.some((page) => page.id === id) && !ids.includes(id)) ids.push(id);
+      if (!ids.includes(id)) ids.push(id);
     }
-  }
-  for (const page of pages) {
-    if (ids.length >= MAX_TARGETED_PAGES) break;
-    if (page.slug.length >= 3 && lower.includes(page.slug) && !ids.includes(page.id)) ids.push(page.id);
   }
   return ids.slice(0, MAX_TARGETED_PAGES);
 }
 
+function slugTargetIds(title: string, pages: Array<{ id: number; slug: string }>, already: number[]): number[] {
+  const ids: number[] = [];
+  const lower = title.toLowerCase();
+  for (const page of pages) {
+    if (already.length + ids.length >= MAX_TARGETED_PAGES) break;
+    if (page.slug.length >= 3 && lower.includes(page.slug) && !already.includes(page.id) && !ids.includes(page.id)) ids.push(page.id);
+  }
+  return ids;
+}
+
 async function loadContext(title: string): Promise<WordPressRunContext | null> {
+  // Start the targeted-content fetches for explicitly named page ids
+  // at the same time as the index fetch: on this host each request
+  // can take 5-10 s, so serializing them is what blew the budget.
+  // Candidates are validated against the index before use.
+  const candidates = pageIdCandidates(title);
+  const candidateContent = new Map(
+    candidates.map((id) => [id, getWordPressPageContent(id).then((result) => result, () => null)] as const),
+  );
   const pages = await listWordPressPageIndex();
   if (!pages.length) return null;
   const index = pages.map((page) => ({
@@ -65,10 +79,9 @@ async function loadContext(title: string): Promise<WordPressRunContext | null> {
     template: page.template,
   }));
   const targeted: WordPressRunContext["targeted_pages"] = [];
-  const results = await Promise.allSettled(targetedPageIds(title, pages).map((id) => getWordPressPageContent(id)));
-  for (const result of results) {
-    if (result.status !== "fulfilled") continue; // One unreadable page must not sink the whole context.
-    const { page, content } = result.value;
+  const pushResult = (result: { page: { id: number; slug: string; title: string; template: string }; content: string } | null) => {
+    if (!result || targeted.length >= MAX_TARGETED_PAGES) return;
+    const { page, content } = result;
     targeted.push({
       id: page.id,
       slug: page.slug,
@@ -77,6 +90,17 @@ async function loadContext(title: string): Promise<WordPressRunContext | null> {
       content: content.slice(0, MAX_PAGE_CONTENT_CHARS),
       content_truncated: content.length > MAX_PAGE_CONTENT_CHARS,
     });
+  };
+  for (const id of candidates) {
+    const pending = candidateContent.get(id);
+    if (pending && pages.some((page) => page.id === id)) pushResult(await pending);
+  }
+  const slugIds = slugTargetIds(title, pages, targeted.map((page) => page.id));
+  if (slugIds.length) {
+    const results = await Promise.allSettled(slugIds.map((id) => getWordPressPageContent(id)));
+    for (const result of results) {
+      if (result.status === "fulfilled") pushResult(result.value); // One unreadable page must not sink the whole context.
+    }
   }
   return { pages: index, targeted_pages: targeted };
 }
