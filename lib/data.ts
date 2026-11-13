@@ -245,8 +245,39 @@ async function sliceExternal(): Promise<{ external_records: ExternalRecord[]; ex
 
 async function sliceSystemChecks(): Promise<SystemCheck[]> {
   if ((await dbSource()) === "demo") return demoChecks;
-  return (await query<SystemCheck>(`SELECT sc.id,p.name AS project_name,sc.system_name,sc.status,sc.latency_ms,sc.details,sc.checked_at::text
+  const checks = (await query<SystemCheck>(`SELECT sc.id,p.name AS project_name,sc.system_name,sc.status,sc.latency_ms,sc.details,sc.checked_at::text
       FROM system_checks sc LEFT JOIN projects p ON p.id=sc.project_id ORDER BY sc.checked_at DESC LIMIT 50`)).rows;
+  // Surface the agent worker's self-check (scripts/agent-worker.mjs) as a
+  // system check. The worker test-loads its Codex launch config and
+  // reports through its heartbeat; a rejected config means the substrate
+  // is broken before any agent starts, which is exactly what an owner
+  // scanning this list needs to see first. Only a fresh heartbeat counts —
+  // a stale one is a different problem (worker offline).
+  try {
+    const heartbeat = await query<{ details: Record<string, unknown> | null; last_seen_at: string; fresh: boolean }>(
+      `SELECT details, last_seen_at::text, last_seen_at > NOW() - INTERVAL '5 minutes' AS fresh
+       FROM runtime_heartbeats WHERE service_name='agent-worker' ORDER BY last_seen_at DESC LIMIT 1`,
+    );
+    const row = heartbeat.rows[0];
+    const details = row?.details;
+    if (row?.fresh && details && typeof details.codex_config_ok === "boolean") {
+      const healthy = details.self_check_ok !== false && details.codex_config_ok;
+      checks.unshift({
+        id: "codex-worker-health",
+        project_name: null,
+        system_name: "Codex:worker-health",
+        status: healthy ? "healthy" : "error",
+        latency_ms: null,
+        details: healthy
+          ? `Worker self-check passed (Codex ${String(details.codex_version ?? "?")}, commit ${String(details.worker_commit ?? "?")}).`
+          : `Worker self-check failing — Codex config ${details.codex_config_ok ? "ok" : "REJECTED"}, database schema ${details.db_schema_ok === false ? "incomplete" : "ok"}. The worker is not claiming runs.`,
+        checked_at: row.last_seen_at,
+      });
+    }
+  } catch {
+    // The heartbeat table is optional context for this list; never fail it.
+  }
+  return checks;
 }
 
 async function sliceSyncRuns(): Promise<SyncRun[]> {
