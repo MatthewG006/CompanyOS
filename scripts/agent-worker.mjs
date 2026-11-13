@@ -77,6 +77,92 @@ const CODEX_ISOLATION_CONFIG_ARGS = [
   "-c", 'shell_environment_policy.inherit="none"',
 ];
 
+// --- Worker self-check ---------------------------------------------------
+// Substrate drift — a Codex config the CLI rejects, a missing database
+// column, a missing API key — otherwise surfaces as a mysteriously failed
+// first task (run 5fd29a5b, 2026-11-12: Codex exited at config load before
+// any agent started). The worker therefore test-loads its own launch
+// configuration and reports the result in its heartbeat: once at startup,
+// every SELF_CHECK_INTERVAL_MS, and immediately after any run dies with a
+// config-load signature (the circuit breaker: codexConfigSuspect forces a
+// re-check, and the DB claim loop refuses to claim while the last check
+// failed, so one broken substrate fails ONE alarm, not every task).
+const CODEX_CONFIG_ERROR_SIGNATURE = /Error loading config\.toml|did not match any variant of untagged enum|config could not be loaded/i;
+let codexConfigSuspect = false;
+
+function runWorkerCommand(command, args, timeoutMs) {
+  return new Promise((resolveCommand) => {
+    let output = "";
+    let settled = false;
+    const done = (code) => {
+      if (!settled) {
+        settled = true;
+        resolveCommand({ code, output });
+      }
+    };
+    try {
+      const child = spawn(command, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+      const timer = setTimeout(() => {
+        child.kill();
+        done(null);
+      }, timeoutMs);
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        if (output.length < 20_000) output += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        if (output.length < 20_000) output += chunk;
+      });
+      child.on("error", () => {
+        clearTimeout(timer);
+        done(null);
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        done(code);
+      });
+    } catch {
+      done(null);
+    }
+  });
+}
+
+async function runWorkerSelfCheck(dbClient) {
+  const versionResult = await runWorkerCommand("codex", ["--version"], 10_000);
+  const codexVersion = versionResult.output.match(/codex-cli\s+(\S+)/)?.[1] ?? null;
+  // The canary: doctor loads the merged config — the worker's exact
+  // isolation overrides included — without invoking a model. Its prose is
+  // the source of truth (exit codes vary with unrelated notes like a
+  // missing login), so health = banner seen AND no config-load signature.
+  const doctorResult = await runWorkerCommand("codex", [...CODEX_ISOLATION_CONFIG_ARGS, "doctor"], 20_000);
+  const codexConfigOk = doctorResult.output.includes("Codex Doctor") && !CODEX_CONFIG_ERROR_SIGNATURE.test(doctorResult.output);
+  const commitResult = await runWorkerCommand("git", ["-C", process.cwd(), "rev-parse", "--short", "HEAD"], 5_000);
+  const workerCommit = commitResult.code === 0 ? commitResult.output.trim().split("\n")[0] || null : null;
+  let dbSchemaOk = null;
+  if (dbClient) {
+    try {
+      const schemaResult = await dbClient.query(
+        "SELECT COUNT(*)::int AS n FROM information_schema.columns WHERE table_name='agent_runs' AND column_name='available_at'",
+      );
+      dbSchemaOk = schemaResult.rows[0].n === 1;
+    } catch {
+      dbSchemaOk = false;
+    }
+  }
+  const selfCheckOk = codexConfigOk && dbSchemaOk !== false;
+  if (selfCheckOk) codexConfigSuspect = false;
+  return {
+    codex_config_ok: codexConfigOk,
+    codex_version: codexVersion,
+    worker_commit: workerCommit,
+    db_schema_ok: dbSchemaOk,
+    openai_key_configured: Boolean(process.env.OPENAI_API_KEY),
+    self_check_ok: selfCheckOk,
+    self_check_at: new Date().toISOString(),
+  };
+}
+
 // Execute prompt via local Codex CLI
 async function runCodexPrompt(prompt) {
   const workspace = await mkdtemp(join(tmpdir(), "companyos-worker-"));
@@ -138,6 +224,11 @@ async function runCodexPrompt(prompt) {
         if (timedOut) return rejectRun(new Error("Codex CLI timed out after 120s."));
         if (overflow) return rejectRun(new Error("Codex CLI output exceeded limit."));
         if (code !== 0) {
+          // Circuit breaker: a config-load failure means the substrate —
+          // not the task — is broken. Flag it so the next maintenance
+          // window re-runs the self-check and the claim gate closes until
+          // the check passes again.
+          if (CODEX_CONFIG_ERROR_SIGNATURE.test(stderr)) codexConfigSuspect = true;
           const errDetail = stderr.trim() ? `: ${stderr.trim().slice(0, 300)}` : "";
           return rejectRun(new Error(`Codex CLI exited with code ${code}${errDetail}`));
         }
@@ -382,6 +473,9 @@ if (useDatabaseMode) {
   // with no write churn. Claiming itself stays on the poll interval.
   const MAINTENANCE_INTERVAL_MS = 30_000;
   let lastMaintenanceAt = 0;
+  const SELF_CHECK_INTERVAL_MS = 300_000;
+  let workerSelfCheck = null;
+  let lastSelfCheckAt = 0;
 
   while (!stopping) {
     let client = null;
@@ -391,6 +485,20 @@ if (useDatabaseMode) {
       if (Date.now() - lastMaintenanceAt >= MAINTENANCE_INTERVAL_MS) {
         lastMaintenanceAt = Date.now();
 
+        // Self-check on startup, on the cadence, and immediately when the
+        // circuit breaker suspects a config-load failure. The result rides
+        // in the heartbeat so the app can show worker health as a system
+        // check ("Codex:worker-health" in lib/data.ts).
+        if (workerSelfCheck === null || codexConfigSuspect || Date.now() - lastSelfCheckAt >= SELF_CHECK_INTERVAL_MS) {
+          workerSelfCheck = await runWorkerSelfCheck(client);
+          lastSelfCheckAt = Date.now();
+          if (workerSelfCheck.self_check_ok) {
+            console.log(`[Worker Self-Check] OK (codex ${workerSelfCheck.codex_version ?? "?"}, commit ${workerSelfCheck.worker_commit ?? "?"}).`);
+          } else {
+            console.error(`[Worker Self-Check] UNHEALTHY: ${JSON.stringify(workerSelfCheck)} — not claiming runs until the self-check passes.`);
+          }
+        }
+
         // Update heartbeat. Agent permissions are owner-managed (seed/schema
         // grants only); this worker must never re-grant them at runtime.
         const codexStatus = await checkCodexStatus();
@@ -398,7 +506,11 @@ if (useDatabaseMode) {
           `INSERT INTO runtime_heartbeats (service_name,instance_id,status,details,last_seen_at)
            VALUES ('agent-worker',$1,$2,$3::jsonb,NOW())
            ON CONFLICT (service_name) DO UPDATE SET instance_id=EXCLUDED.instance_id,status=EXCLUDED.status,details=EXCLUDED.details,last_seen_at=NOW()`,
-          [workerId, codexStatus.authenticated ? "online" : "degraded", JSON.stringify({ codex_cli_authenticated: codexStatus.authenticated })],
+          [
+            workerId,
+            codexStatus.authenticated && (!workerSelfCheck || workerSelfCheck.self_check_ok) ? "online" : "degraded",
+            JSON.stringify({ codex_cli_authenticated: codexStatus.authenticated, ...(workerSelfCheck ?? {}) }),
+          ],
         );
 
         // Expire runs whose worker lease has lapsed (mirrors the HTTP worker
@@ -414,16 +526,21 @@ if (useDatabaseMode) {
         );
       }
 
-      // Claim next queued run
+      // Claim next queued run. The self-check gate ($1) closes claiming
+      // while the substrate is known-broken: the candidate set is empty,
+      // the run stays queued, and the heartbeat/system check carries the
+      // reason instead of every task failing identically.
+      const mayClaim = !workerSelfCheck || workerSelfCheck.self_check_ok;
       await client.query("BEGIN");
       const claimResult = await client.query(
         `WITH candidate AS (
            SELECT id FROM agent_runs WHERE status='queued' AND provider IN ('codex-cli', 'auto', 'agnostic')
-             AND (available_at IS NULL OR available_at <= NOW())
+             AND (available_at IS NULL OR available_at <= NOW()) AND $1::boolean
            ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
          )
          UPDATE agent_runs r SET status='running',summary='Worker running on VM.',started_at=NOW(),error=NULL
          FROM candidate c WHERE r.id=c.id RETURNING r.id,r.task_id,r.input`,
+        [mayClaim],
       );
       const claimed = claimResult.rows[0] ?? null;
       if (claimed) {
