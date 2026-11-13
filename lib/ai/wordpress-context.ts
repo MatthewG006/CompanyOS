@@ -17,7 +17,12 @@ import { getWordPressPageContent, listWordPressPageIndex } from "@/lib/integrati
  */
 
 const MAX_TARGETED_PAGES = 2;
-const MAX_PAGE_CONTENT_CHARS = 2_200;
+// A real page body runs 5-10 KB; the first live tests showed a
+// 2,200-char excerpt is not enough to edit from (the agent rightly
+// refused to "preserve" wording it could not see). The prompt
+// builder carries targeted contents in a dedicated section with its
+// own budget instead of the 6,000-char shared memory slice.
+const MAX_PAGE_CONTENT_CHARS = 12_000;
 // The WordPress host can take 5-10 s to answer on a cold connection
 // (measured live 2026-11-13); an 8 s budget silently starved the
 // first plumbing test run of its context. The lean _fields index
