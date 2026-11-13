@@ -44,6 +44,8 @@ type AgentActionRequest = {
   pageId?: number;
   slug?: string;
   pageStatus?: "draft" | "publish";
+  pageTemplate?: string;
+  pageStyle?: string;
   sourceUrl?: string;
   altText?: string;
   menuId?: number;
@@ -129,6 +131,40 @@ function boundedInt(value: unknown, min: number, max: number): number | undefine
 function boundedSlug(value: unknown): string {
   const slug = boundedText(value, 200).toLowerCase();
   return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) ? slug : "";
+}
+
+/**
+ * A WordPress page template identifier: "" is a real value (the theme
+ * default), template ids and relative .php paths are the other shapes
+ * WordPress stores. Anything with whitespace, quotes, or URL/scheme
+ * characters is not a template name and drops to undefined (field not
+ * proposed), which leaves the page's template untouched at execution.
+ */
+export function boundedTemplate(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const template = value.trim().slice(0, 120);
+  if (template === "") return "";
+  return /^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(template) && !template.includes("..") ? template : undefined;
+}
+
+/**
+ * The separately approved page CSS block. Bounded in size and refused
+ * outright when it could break out of its <style> element or pull in
+ * external resources; scoping under the page's wrapper class is the
+ * proposing agent's job (the prompt requires it) and the owner reviews
+ * the exact CSS in the approval.
+ */
+export function boundedPageStyle(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const style = value.trim().slice(0, 8_000);
+  if (!style) return undefined;
+  if (/<\/style/i.test(style) || /@import/i.test(style) || /expression\s*\(/i.test(style) || /javascript\s*:/i.test(style)) return undefined;
+  return style;
+}
+
+/** How many <img> tags a page body carries — surfaced on the approval. */
+export function countContentImages(content: string): number {
+  return (content.match(/<img[\s>]/gi) ?? []).length;
 }
 
 function isHttpUrl(value: string): boolean {
@@ -504,8 +540,10 @@ const publishWordPressPageTool: AgentTool = {
     const pageId = boundedInt(value.page_id, 1, 2_147_483_647);
     const slug = boundedSlug(value.slug);
     const pageStatus = value.status === "publish" ? "publish" : "draft";
+    const pageTemplate = boundedTemplate(value.template);
+    const pageStyle = boundedPageStyle(value.style);
     return value.type === "publish_wordpress_page" && content && reason && (title || pageId)
-      ? { title, content, reason, pageId, slug, pageStatus }
+      ? { title, content, reason, pageId, slug, pageStatus, pageTemplate, pageStyle, imageCount: countContentImages(content) }
       : null;
   },
   approvalPayload(value) {
@@ -515,12 +553,21 @@ const publishWordPressPageTool: AgentTool = {
       title: value.title,
       content: value.content,
       status: value.pageStatus ?? "draft",
+      template: value.pageTemplate ?? null,
+      style: value.pageStyle ?? "",
+      image_count: value.imageCount ?? countContentImages(value.content ?? ""),
     };
   },
   approvalLabel(value) {
     const live = value.pageStatus === "publish";
-    if (value.pageId) return `Update WordPress page #${value.pageId} (${live ? "LIVE" : "draft"}): ${value.title}`;
-    return `Publish WordPress page ${live ? "LIVE" : "draft"}: ${value.title}`;
+    const base = value.pageId
+      ? `Update WordPress page #${value.pageId} (${live ? "LIVE" : "draft"}): ${value.title}`
+      : `Publish WordPress page ${live ? "LIVE" : "draft"}: ${value.title}`;
+    const notes: string[] = [];
+    if (value.pageTemplate !== undefined) notes.push(`template: ${value.pageTemplate || "default"}`);
+    if (value.pageStyle) notes.push("includes page CSS");
+    if ((value.imageCount ?? countContentImages(value.content ?? "")) === 0) notes.push("no images");
+    return notes.length ? `${base} [${notes.join("; ")}]` : base;
   },
   async execute(client, projectId, agentId, rawPayload, runId) {
     const payload = rawPayload && typeof rawPayload === "object" ? rawPayload as Record<string, unknown> : {};
@@ -529,12 +576,17 @@ const publishWordPressPageTool: AgentTool = {
     const pageId = boundedInt(payload.page_id, 1, 2_147_483_647);
     const slug = boundedSlug(payload.slug);
     const status = payload.status === "publish" ? "publish" : "draft";
+    // Payloads approved before template/style existed carry no such
+    // fields; boundedTemplate(undefined) stays undefined and the page
+    // keeps its current template, exactly as the old executor behaved.
+    const template = boundedTemplate(payload.template);
+    const style = boundedPageStyle(payload.style);
     if (!content || !(title || pageId) || !projectId) throw new Error("The approved WordPress page payload is invalid.");
-    const { page, created } = await createOrUpdateWordPressPage({ pageId, slug: slug || undefined, title, content, status });
+    const { page, created } = await createOrUpdateWordPressPage({ pageId, slug: slug || undefined, title, content, status, template, style });
     await client.query(
       `INSERT INTO events (source,event_type,title,severity,project_id,payload)
        VALUES ('wordpress','wordpress_page_published','WordPress page saved from approved agent action','info',$1,$2::jsonb)`,
-      [projectId, JSON.stringify({ page_id: page.id, link: page.link, created, status, agent_run_id: runId, agent_id: agentId, title })],
+      [projectId, JSON.stringify({ page_id: page.id, link: page.link, created, status, template: template ?? null, has_style: Boolean(style), agent_run_id: runId, agent_id: agentId, title })],
     );
     return String(page.id);
   },

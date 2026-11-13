@@ -758,6 +758,22 @@ if (useDatabaseMode) {
                       const slug = boundedText(value, 200).toLowerCase();
                       return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) ? slug : "";
                     };
+                    // Mirror boundedTemplate / boundedPageStyle /
+                    // countContentImages in lib/ai/tool-registry.ts.
+                    const wpTemplate = (value) => {
+                      if (typeof value !== "string") return undefined;
+                      const template = value.trim().slice(0, 120);
+                      if (template === "") return "";
+                      return /^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(template) && !template.includes("..") ? template : undefined;
+                    };
+                    const wpPageStyle = (value) => {
+                      if (typeof value !== "string") return undefined;
+                      const style = value.trim().slice(0, 8_000);
+                      if (!style) return undefined;
+                      if (/<\/style/i.test(style) || /@import/i.test(style) || /expression\s*\(/i.test(style) || /javascript\s*:/i.test(style)) return undefined;
+                      return style;
+                    };
+                    const wpImageCount = (content) => (content.match(/<img[\s>]/gi) ?? []).length;
                     const wpHttpUrl = (value) => {
                       try {
                         const parsed = new URL(value);
@@ -784,11 +800,19 @@ if (useDatabaseMode) {
                         const pageId = wpInt(prop.page_id, 1, 2_147_483_647);
                         const slug = wpSlug(prop.slug);
                         const status = prop.status === "publish" ? "publish" : "draft";
+                        const template = wpTemplate(prop.template);
+                        const style = wpPageStyle(prop.style);
+                        const imageCount = wpImageCount(content);
                         if (!content || !(title || pageId)) continue;
-                        const label = pageId
+                        const baseLabel = pageId
                           ? `Update WordPress page #${pageId} (${status === "publish" ? "LIVE" : "draft"}): ${title}`
                           : `Publish WordPress page ${status === "publish" ? "LIVE" : "draft"}: ${title}`;
-                        await insertWpApproval(idx, "publish_wordpress_page", label, reason, { page_id: pageId ?? null, slug, title, content, status });
+                        const notes = [];
+                        if (template !== undefined) notes.push(`template: ${template || "default"}`);
+                        if (style) notes.push("includes page CSS");
+                        if (imageCount === 0) notes.push("no images");
+                        const label = notes.length ? `${baseLabel} [${notes.join("; ")}]` : baseLabel;
+                        await insertWpApproval(idx, "publish_wordpress_page", label, reason, { page_id: pageId ?? null, slug, title, content, status, template: template ?? null, style: style ?? "", image_count: imageCount });
                       } else if (prop?.type === "upload_wordpress_media") {
                         const sourceUrl = boundedText(prop.source_url, 1000);
                         const title = boundedText(prop.title, 200);

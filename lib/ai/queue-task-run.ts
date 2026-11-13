@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
-import { buildTaskPrompt } from "@/lib/ai/router";
+import { buildTaskPrompt, type AgentMemory } from "@/lib/ai/router";
+import { loadWordPressRunContext } from "@/lib/ai/wordpress-context";
 
 /**
  * Codex CLI is the autonomous operator for every role: when a task is
@@ -55,6 +56,15 @@ export async function queueTaskExecution(
   // types — agents then improvise with tools the sandbox forbids (e.g. the
   // built-in image tool, which dies on approval_policy="never") instead of
   // proposing the matching CompanyOS tool.
+  // Agents holding WordPress site-management permission get the site's
+  // page index — and the current content of any page the task names —
+  // as bounded run memory, so a fix task edits the real page instead of
+  // declining or replacing blind. The loader never fails the queue.
+  let memory: AgentMemory = {};
+  if (agent.allowed_actions.includes("request_wordpress_manage")) {
+    const wordpress = await loadWordPressRunContext(args.title);
+    if (wordpress) memory = { wordpress };
+  }
   const prompt = buildTaskPrompt(
     {
       title: args.title,
@@ -68,7 +78,7 @@ export async function queueTaskExecution(
       agent_memory_scope: agent.memory_scope,
       agent_allowed_actions: agent.allowed_actions,
     },
-    {},
+    memory,
   );
   const input = isManual
     ? {
