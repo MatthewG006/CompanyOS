@@ -93,6 +93,14 @@ export async function createWordPressPost(post: {
 /**
  * Create a page, or update the existing page targeted by id (preferred)
  * or slug. Used by the publish_wordpress_page tool after owner approval.
+ *
+ * `template` sets the page template ("" = theme default; undefined
+ * leaves it unchanged) — the lever that decides whether the theme
+ * prints its own title/header shell around the content. `style` is a
+ * separately approved CSS block: it is stored ahead of the content in a
+ * marked <style> element so page rules travel with the page and, being
+ * scoped by the agent under the content's wrapper class, outrank the
+ * theme rules that otherwise repaint sections after the fact.
  */
 export async function createOrUpdateWordPressPage(input: {
   pageId?: number;
@@ -100,24 +108,45 @@ export async function createOrUpdateWordPressPage(input: {
   title: string;
   content: string;
   status?: "draft" | "publish";
+  template?: string;
+  style?: string;
 }): Promise<{ page: WordPressPage; created: boolean }> {
   const client = await wordpressClient();
+  const content = input.style ? `<style data-companyos-scoped="page">\n${input.style}\n</style>\n${input.content}` : input.content;
   let targetId = input.pageId;
   if (!targetId && input.slug) {
     const existing = await client.findPageBySlug(input.slug);
     targetId = existing?.id;
   }
   if (targetId) {
-    const page = await client.updatePage(targetId, { title: input.title, content: input.content, status: input.status ?? "draft" });
+    const page = await client.updatePage(targetId, {
+      title: input.title,
+      content,
+      status: input.status ?? "draft",
+      ...(input.template !== undefined ? { template: input.template } : {}),
+    });
     return { page, created: false };
   }
   const page = await client.createPage({
     title: input.title,
-    content: input.content,
+    content,
     ...(input.slug ? { slug: input.slug } : {}),
     status: input.status ?? "draft",
+    ...(input.template !== undefined ? { template: input.template } : {}),
   });
   return { page, created: true };
+}
+
+/** Page index (id, slug, title, status, template) for rebuild planning. */
+export async function listWordPressPages(): Promise<WordPressPage[]> {
+  const client = await wordpressClient();
+  return client.listPages();
+}
+
+/** One page's stored content, for an agent editing rather than replacing blind. */
+export async function getWordPressPageContent(pageId: number): Promise<{ page: WordPressPage; content: string }> {
+  const client = await wordpressClient();
+  return client.getPageContent(pageId);
 }
 
 /** Download an approved public source URL into the WordPress media library. */

@@ -43,6 +43,7 @@ export type WordPressPage = {
   link: string;
   status: string;
   title: string;
+  template: string;
 };
 
 export type WordPressMedia = {
@@ -97,6 +98,13 @@ export type WordPressPageInput = {
   content: string;
   slug?: string;
   status?: "draft" | "publish" | "pending" | "private";
+  /**
+   * Page template identifier as WordPress stores it in the page's
+   * `template` field: "" selects the theme default, other values are
+   * template ids such as "elementor_header_footer" or file paths such
+   * as "template-blank.php". Undefined leaves the template untouched.
+   */
+  template?: string;
 };
 
 export type WordPressMediaBytesInput = {
@@ -136,6 +144,7 @@ function toPage(raw: Record<string, unknown>): WordPressPage {
     link: String(raw.link ?? ""),
     status: String(raw.status ?? ""),
     title: rendered(raw.title),
+    template: String(raw.template ?? ""),
   };
 }
 
@@ -323,6 +332,7 @@ export function createWordPressClient(credentials: WordPressCredentials, fetchFn
           content: input.content,
           ...(input.slug ? { slug: input.slug } : {}),
           status: input.status ?? "draft",
+          ...(input.template !== undefined ? { template: input.template } : {}),
         }),
       });
       return toPage(data);
@@ -336,9 +346,25 @@ export function createWordPressClient(credentials: WordPressCredentials, fetchFn
           ...(input.content !== undefined ? { content: input.content } : {}),
           ...(input.slug !== undefined ? { slug: input.slug } : {}),
           ...(input.status !== undefined ? { status: input.status } : {}),
+          ...(input.template !== undefined ? { template: input.template } : {}),
         }),
       });
       return toPage(data);
+    },
+
+    /**
+     * Full page read for rebuild planning: the page record plus its
+     * stored content. With context=edit WordPress returns the raw
+     * content exactly as saved (shortcodes and blocks unexpanded),
+     * which is what an editor needs to revise a page instead of
+     * replacing it blind; the rendered form is the fallback when the
+     * raw field is absent.
+     */
+    async getPageContent(id: number): Promise<{ page: WordPressPage; content: string }> {
+      const data = await request<Record<string, unknown>>(`/wp-json/wp/v2/pages/${id}?context=edit`);
+      const rawContent = data.content && typeof data.content === "object" ? (data.content as { raw?: unknown; rendered?: unknown }) : {};
+      const content = typeof rawContent.raw === "string" ? rawContent.raw : rendered(data.content);
+      return { page: toPage(data), content };
     },
 
     async listMedia(perPage = 100): Promise<WordPressMedia[]> {
