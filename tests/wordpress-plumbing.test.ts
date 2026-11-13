@@ -61,9 +61,17 @@ test("client reads a page's stored raw content and template for edit context", a
   }));
   const client = createWordPressClient(credentials, fetchFn);
   const { page, content } = await client.getPageContent(2081);
-  assert.equal(calls[0].url, "https://www.example-site.com/wp-json/wp/v2/pages/2081?context=edit");
+  assert.equal(calls[0].url, "https://www.example-site.com/wp-json/wp/v2/pages/2081?context=edit&_fields=id,slug,link,status,title,template,content");
   assert.equal(content, "<section>raw html</section>");
   assert.equal(page.template, "elementor_header_footer");
+});
+
+test("the page index request projects only the fields the context loader needs", async () => {
+  const { fetchFn, calls } = mockFetch(() => ({ body: [pageBody] }));
+  const client = createWordPressClient(credentials, fetchFn);
+  const index = await client.listPageIndex();
+  assert.equal(index[0].template, "elementor_header_footer");
+  assert.match(calls[0].url, /_fields=id,slug,link,status,title,template/);
 });
 
 test("the page tool carries template, style, and image count through parse, payload, and execute", () => {
@@ -109,6 +117,12 @@ test("runs for WordPress-managing agents are queued with current page context", 
   assert.match(context, /targetedPageIds/);
   // The loader must never fail the queue.
   assert.match(context, /catch \{\s*\n\s*return null;/);
+  // Speed guards from the first live test: the host answers slowly,
+  // so the loader uses the lean index, fetches targeted pages in
+  // parallel, and keeps a budget that covers the slow tail.
+  assert.match(context, /listWordPressPageIndex\(\)/);
+  assert.match(context, /Promise\.allSettled/);
+  assert.match(context, /CONTEXT_TIMEOUT_MS = 20_000/);
 });
 
 test("the prompt teaches template, scoped style, contrast, and image expectations", () => {

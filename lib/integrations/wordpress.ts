@@ -143,6 +143,12 @@ export async function listWordPressPages(): Promise<WordPressPage[]> {
   return client.listPages();
 }
 
+/** Lean page index (no page bodies) for run-context loading. */
+export async function listWordPressPageIndex(): Promise<WordPressPage[]> {
+  const client = await wordpressClient();
+  return client.listPageIndex();
+}
+
 /** One page's stored content, for an agent editing rather than replacing blind. */
 export async function getWordPressPageContent(pageId: number): Promise<{ page: WordPressPage; content: string }> {
   const client = await wordpressClient();

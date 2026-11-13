@@ -1,4 +1,4 @@
-import { getWordPressPageContent, listWordPressPages } from "@/lib/integrations/wordpress";
+import { getWordPressPageContent, listWordPressPageIndex } from "@/lib/integrations/wordpress";
 
 /**
  * WordPress run context for agents holding request_wordpress_manage.
@@ -18,7 +18,12 @@ import { getWordPressPageContent, listWordPressPages } from "@/lib/integrations/
 
 const MAX_TARGETED_PAGES = 2;
 const MAX_PAGE_CONTENT_CHARS = 2_200;
-const CONTEXT_TIMEOUT_MS = 8_000;
+// The WordPress host can take 5-10 s to answer on a cold connection
+// (measured live 2026-11-13); an 8 s budget silently starved the
+// first plumbing test run of its context. The lean _fields index
+// keeps the normal case near a second, and this budget covers the
+// slow tail without blocking task creation for long.
+const CONTEXT_TIMEOUT_MS = 20_000;
 
 export type WordPressRunContext = {
   pages: Array<{ id: number; slug: string; title: string; status: string; template: string }>;
@@ -50,7 +55,7 @@ function targetedPageIds(title: string, pages: Array<{ id: number; slug: string 
 }
 
 async function loadContext(title: string): Promise<WordPressRunContext | null> {
-  const pages = await listWordPressPages();
+  const pages = await listWordPressPageIndex();
   if (!pages.length) return null;
   const index = pages.map((page) => ({
     id: page.id,
@@ -60,20 +65,18 @@ async function loadContext(title: string): Promise<WordPressRunContext | null> {
     template: page.template,
   }));
   const targeted: WordPressRunContext["targeted_pages"] = [];
-  for (const id of targetedPageIds(title, pages)) {
-    try {
-      const { page, content } = await getWordPressPageContent(id);
-      targeted.push({
-        id: page.id,
-        slug: page.slug,
-        title: page.title,
-        template: page.template,
-        content: content.slice(0, MAX_PAGE_CONTENT_CHARS),
-        content_truncated: content.length > MAX_PAGE_CONTENT_CHARS,
-      });
-    } catch {
-      // One unreadable page must not sink the whole context.
-    }
+  const results = await Promise.allSettled(targetedPageIds(title, pages).map((id) => getWordPressPageContent(id)));
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue; // One unreadable page must not sink the whole context.
+    const { page, content } = result.value;
+    targeted.push({
+      id: page.id,
+      slug: page.slug,
+      title: page.title,
+      template: page.template,
+      content: content.slice(0, MAX_PAGE_CONTENT_CHARS),
+      content_truncated: content.length > MAX_PAGE_CONTENT_CHARS,
+    });
   }
   return { pages: index, targeted_pages: targeted };
 }

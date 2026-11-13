@@ -312,6 +312,19 @@ export function createWordPressClient(credentials: WordPressCredentials, fetchFn
       return data.map(toPage);
     },
 
+    /**
+     * Lean page index for planning/context: the _fields projection
+     * keeps WordPress from serializing every page's full content into
+     * the list response (measured on a real site: 126 KB and 5-10 s
+     * unfiltered, which blew the run-context loader's time budget).
+     */
+    async listPageIndex(perPage = 100): Promise<WordPressPage[]> {
+      const data = await request<Array<Record<string, unknown>>>(
+        `/wp-json/wp/v2/pages?context=edit&per_page=${Math.min(Math.max(perPage, 1), 100)}&_fields=id,slug,link,status,title,template`,
+      );
+      return data.map(toPage);
+    },
+
     async getPage(id: number): Promise<WordPressPage> {
       const data = await request<Record<string, unknown>>(`/wp-json/wp/v2/pages/${id}?context=edit`);
       return toPage(data);
@@ -361,7 +374,9 @@ export function createWordPressClient(credentials: WordPressCredentials, fetchFn
      * raw field is absent.
      */
     async getPageContent(id: number): Promise<{ page: WordPressPage; content: string }> {
-      const data = await request<Record<string, unknown>>(`/wp-json/wp/v2/pages/${id}?context=edit`);
+      const data = await request<Record<string, unknown>>(
+        `/wp-json/wp/v2/pages/${id}?context=edit&_fields=id,slug,link,status,title,template,content`,
+      );
       const rawContent = data.content && typeof data.content === "object" ? (data.content as { raw?: unknown; rendered?: unknown }) : {};
       const content = typeof rawContent.raw === "string" ? rawContent.raw : rendered(data.content);
       return { page: toPage(data), content };
