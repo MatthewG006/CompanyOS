@@ -45,6 +45,7 @@ export async function recordAgentProposals(client: PoolClient, runId: string, re
       || !Array.isArray(run.memory_scope) || !run.memory_scope.includes("support")
       || !workflowContext || typeof workflowContext !== "object" || (workflowContext as Record<string, unknown>).category !== "support_case")) continue;
     if (tool.actionType === "manage_proxmox_container" && run.agent_name?.toLowerCase() !== "devops") continue;
+    if (tool.actionType === "repair_worker" && run.agent_name?.toLowerCase() !== "devops") continue;
     const request = tool.parseProposal(proposal as Record<string, unknown>);
     if (!request) continue;
     const directReport = run.direct_reports.find((child) => child.id === request.assigneeAgentId);

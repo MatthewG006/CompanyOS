@@ -89,6 +89,10 @@ const CODEX_ISOLATION_CONFIG_ARGS = [
 // failed, so one broken substrate fails ONE alarm, not every task).
 const CODEX_CONFIG_ERROR_SIGNATURE = /Error loading config\.toml|did not match any variant of untagged enum|config could not be loaded/i;
 let codexConfigSuspect = false;
+// Last commit at which the self-check fully passed. The heartbeat carries
+// it so a rollback proposal can name a target that is known-good rather
+// than guessed.
+let lastGoodCommit = null;
 
 function runWorkerCommand(command, args, timeoutMs) {
   return new Promise((resolveCommand) => {
@@ -151,11 +155,15 @@ async function runWorkerSelfCheck(dbClient) {
     }
   }
   const selfCheckOk = codexConfigOk && dbSchemaOk !== false;
-  if (selfCheckOk) codexConfigSuspect = false;
+  if (selfCheckOk) {
+    codexConfigSuspect = false;
+    if (workerCommit) lastGoodCommit = workerCommit;
+  }
   return {
     codex_config_ok: codexConfigOk,
     codex_version: codexVersion,
     worker_commit: workerCommit,
+    last_good_commit: lastGoodCommit,
     db_schema_ok: dbSchemaOk,
     openai_key_configured: Boolean(process.env.OPENAI_API_KEY),
     self_check_ok: selfCheckOk,
@@ -279,6 +287,24 @@ function parseImageGenerationSpec(raw) {
   const purpose = IMAGE_GENERATION_PURPOSES.has(raw.purpose) ? raw.purpose : "other";
   const contentItemId = typeof raw.content_item_id === "string" && IMAGE_GENERATION_UUID.test(raw.content_item_id) ? raw.content_item_id : null;
   return { prompt, count, purpose, contentItemId };
+}
+
+// The mechanic's repair channel: an owner-approved repair arrives as a run
+// whose input carries a worker_repair spec, and the worker executes it
+// itself — never through Codex, because the failures it fixes are the ones
+// where Codex cannot start (which is also why the claim query exempts
+// these runs from the self-check gate). The allowlist is deliberately
+// tiny and every layer re-validates it: proposal, approval payload,
+// registry execution, and here again before anything runs.
+const WORKER_REPAIR_ACTIONS = new Set(["restart_worker", "update_worker", "rollback_worker"]);
+const WORKER_REPAIR_COMMIT_PATTERN = /^[0-9a-f]{7,40}$/;
+
+function parseWorkerRepairSpec(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if (!WORKER_REPAIR_ACTIONS.has(raw.action)) return null;
+  const commit = typeof raw.commit === "string" ? raw.commit.trim().toLowerCase() : null;
+  if (raw.action === "rollback_worker" && (!commit || !WORKER_REPAIR_COMMIT_PATTERN.test(commit))) return null;
+  return { action: raw.action, commit: raw.action === "rollback_worker" ? commit : null };
 }
 
 async function collectImageFiles(directory, { depth = 0 } = {}) {
@@ -440,6 +466,86 @@ async function executeImageGenerationRun(pool, claimed, task, spec) {
   }
 }
 
+// Restart via the supervisor (PM2 on the worker host). Detached so this
+// process finalizes the run first; PM2 cycles it moments later and the new
+// process self-checks on boot.
+function scheduleWorkerRestart() {
+  const child = spawn("pm2", ["restart", "companyos-worker"], { detached: true, stdio: "ignore" });
+  child.unref();
+}
+
+async function executeWorkerRepairRun(pool, claimed, task, spec) {
+  const finish = async (status, summary) => {
+    await pool.query(
+      "UPDATE agent_runs SET provider='worker-repair',model='mechanic (deterministic)',status=$2,summary=$3,result=$4::jsonb,error=$5,completed_at=NOW() WHERE id=$1",
+      [claimed.id, status, summary.slice(0, 500), JSON.stringify({ text: summary, worker_repair: spec }), status === "failed" ? summary.slice(0, 500) : null],
+    );
+    await pool.query("UPDATE workflow_dispatches SET status=$2 WHERE agent_run_id=$1", [claimed.id, status]);
+    await pool.query(
+      "INSERT INTO events (source,event_type,title,severity,payload) VALUES ('agent-worker','worker_repair_executed',$1,$2,$3::jsonb)",
+      [`Worker repair ${spec.action} ${status === "completed" ? "executed" : "failed"}: ${task.title}`, status === "completed" ? "info" : "warning", JSON.stringify({ run_id: claimed.id, task_id: task.id, worker_repair: spec })],
+    );
+    console.log(`[Worker Repair] ${spec.action} run ${claimed.id}: ${status}. ${summary}`);
+  };
+  try {
+    const headResult = await runWorkerCommand("git", ["-C", process.cwd(), "rev-parse", "--short", "HEAD"], 15_000);
+    const commitBefore = headResult.code === 0 ? headResult.output.trim().split("\n")[0] || "unknown" : "unknown";
+    if (spec.action === "restart_worker") {
+      await finish("completed", `Worker restarted on owner-approved command (commit ${commitBefore}); it re-runs its self-check on boot.`);
+      scheduleWorkerRestart();
+      return;
+    }
+    const fetchResult = await runWorkerCommand("git", ["-C", process.cwd(), "fetch", "origin"], 60_000);
+    if (fetchResult.code !== 0) {
+      await finish("failed", `Worker ${spec.action} failed at git fetch: ${fetchResult.output.slice(-300)}`);
+      return;
+    }
+    if (spec.action === "update_worker") {
+      const targetResult = await runWorkerCommand("git", ["-C", process.cwd(), "rev-parse", "--short", "origin/main"], 15_000);
+      const target = targetResult.code === 0 ? targetResult.output.trim().split("\n")[0] : "";
+      if (target && target === commitBefore) {
+        await finish("completed", `Worker already runs the latest main (${commitBefore}); no update needed.`);
+        return;
+      }
+      const checkoutResult = await runWorkerCommand("git", ["-C", process.cwd(), "checkout", "main"], 30_000);
+      if (checkoutResult.code !== 0) {
+        await finish("failed", `Worker update failed at git checkout main: ${checkoutResult.output.slice(-300)}`);
+        return;
+      }
+      const ffResult = await runWorkerCommand("git", ["-C", process.cwd(), "merge", "--ff-only", "origin/main"], 30_000);
+      if (ffResult.code !== 0) {
+        await finish("failed", `Worker update failed at fast-forward: ${ffResult.output.slice(-300)}`);
+        return;
+      }
+      await finish("completed", `Worker updated ${commitBefore} -> ${target || "latest main"} on owner-approved command; restarting to load the new code.`);
+      scheduleWorkerRestart();
+      return;
+    }
+    // rollback_worker: the target must exist locally and be an ancestor of
+    // origin/main — a rollback goes back along main's own history, never
+    // to an arbitrary ref.
+    const existsResult = await runWorkerCommand("git", ["-C", process.cwd(), "cat-file", "-e", `${spec.commit}^{commit}`], 15_000);
+    if (existsResult.code !== 0) {
+      await finish("failed", `Rollback target ${spec.commit} does not exist in the worker checkout.`);
+      return;
+    }
+    const ancestorResult = await runWorkerCommand("git", ["-C", process.cwd(), "merge-base", "--is-ancestor", spec.commit, "origin/main"], 15_000);
+    if (ancestorResult.code !== 0) {
+      await finish("failed", `Rollback target ${spec.commit} is not an ancestor of origin/main; refusing to roll back to it.`);
+      return;
+    }
+    const rollbackResult = await runWorkerCommand("git", ["-C", process.cwd(), "checkout", spec.commit], 30_000);
+    if (rollbackResult.code !== 0) {
+      await finish("failed", `Worker rollback failed at git checkout: ${rollbackResult.output.slice(-300)}`);
+      return;
+    }
+    await finish("completed", `Worker rolled back ${commitBefore} -> ${spec.commit} on owner-approved command; restarting to load the rolled-back code.`);
+    scheduleWorkerRestart();
+  } catch (error) {
+    await finish("failed", `Worker ${spec.action} failed: ${String(error?.message ?? error).slice(0, 300)}`);
+  }
+}
+
 // Database direct mode (opt-in via COMPANYOS_WORKER_MODE=db; see above)
 if (useDatabaseMode) {
   // SSL rule mirrors resolveDatabaseSsl in lib/db-ssl.ts (this standalone
@@ -535,7 +641,8 @@ if (useDatabaseMode) {
       const claimResult = await client.query(
         `WITH candidate AS (
            SELECT id FROM agent_runs WHERE status='queued' AND provider IN ('codex-cli', 'auto', 'agnostic')
-             AND (available_at IS NULL OR available_at <= NOW()) AND $1::boolean
+             AND (available_at IS NULL OR available_at <= NOW())
+             AND ($1::boolean OR (input->'worker_repair') IS NOT NULL)
            ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
          )
          UPDATE agent_runs r SET status='running',summary='Worker running on VM.',started_at=NOW(),error=NULL
@@ -559,6 +666,7 @@ if (useDatabaseMode) {
            LEFT JOIN agents manager ON manager.id=a.reports_to WHERE t.id=$1`, [claimed.task_id],
         );
         const task = taskRes.rows[0];
+        const repairSpec = parseWorkerRepairSpec(claimed.input?.worker_repair);
         const imageSpec = parseImageGenerationSpec(claimed.input?.image_generation);
 
         if (!task || task.status === "done" || !task.agent_id) {
@@ -567,6 +675,12 @@ if (useDatabaseMode) {
             [claimed.id],
           );
           console.log(`[Worker] Run ${claimed.id} failed: task missing or complete.`);
+        } else if (repairSpec) {
+          // Worker repair (the mechanic's channel): this run exists only
+          // to execute the owner-approved repair in its input spec, on
+          // the worker process itself; the dedicated branch performs it
+          // and finalizes the run. Never routed through Codex.
+          await executeWorkerRepairRun(pool, claimed, task, repairSpec);
         } else if (imageSpec) {
           // Image-generation bridge: this run exists only to generate the
           // owner-approved image(s) in its input spec; the dedicated
@@ -789,6 +903,37 @@ if (useDatabaseMode) {
                          VALUES ($1,$2,$3,'high',$4,$5,$6,'manage_proxmox_container',$7,$8::jsonb)
                          ON CONFLICT (agent_run_id,proposal_index) WHERE agent_run_id IS NOT NULL AND proposal_index IS NOT NULL DO NOTHING`,
                         [task.project_id, task.agent_name ?? "Agent", label, reason, claimed.id, task.agent_id, idx, JSON.stringify(payload)],
+                      );
+                      proposalCount += 1;
+                    }
+                  }
+                  // Mirror repairWorkerTool in lib/ai/tool-registry.ts:
+                  // only the DevOps agent holding request_worker_repair
+                  // may propose worker repairs, the run must be
+                  // project-scoped, and the payload matches the registry
+                  // exactly. The allowlist is restart / update / rollback;
+                  // rollback requires a hex commit. Execution happens on
+                  // the worker itself, never through Codex.
+                  const canRepairWorker = Array.isArray(task.agent_allowed_actions) && task.agent_allowed_actions.includes("request_worker_repair")
+                    && typeof task.agent_name === "string" && task.agent_name.toLowerCase() === "devops";
+                  if (canRepairWorker && task.project_id) {
+                    for (const [idx, prop] of parsed.proposed_actions.slice(0, 5).entries()) {
+                      if (prop?.type !== "repair_worker") continue;
+                      const reason = boundedText(prop?.reason, 500);
+                      const action = ["restart_worker", "update_worker", "rollback_worker"].includes(prop.action) ? prop.action : undefined;
+                      if (!reason || reason.length < 8 || !action) continue;
+                      const commit = typeof prop.commit === "string" ? prop.commit.trim().toLowerCase() : "";
+                      if (action === "rollback_worker" && !/^[0-9a-f]{7,40}$/.test(commit)) continue;
+                      const label = action === "restart_worker"
+                        ? "Restart the Codex worker"
+                        : action === "update_worker"
+                          ? "Update the Codex worker to the latest main"
+                          : `Roll the Codex worker back to ${commit}`;
+                      await pool.query(
+                        `INSERT INTO approvals (project_id,requested_by,action,risk_level,reason,agent_run_id,agent_id,action_type,proposal_index,payload)
+                         VALUES ($1,$2,$3,'high',$4,$5,$6,'repair_worker',$7,$8::jsonb)
+                         ON CONFLICT (agent_run_id,proposal_index) WHERE agent_run_id IS NOT NULL AND proposal_index IS NOT NULL DO NOTHING`,
+                        [task.project_id, task.agent_name ?? "Agent", label, reason, claimed.id, task.agent_id, idx, JSON.stringify({ action, commit: action === "rollback_worker" ? commit : null })],
                       );
                       proposalCount += 1;
                     }

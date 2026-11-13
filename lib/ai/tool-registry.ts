@@ -65,11 +65,36 @@ type AgentActionRequest = {
   currentSwapMb?: number;
   generationPrompt?: string;
   imageCount?: number;
+  workerRepairAction?: WorkerRepairAction;
+  workerRepairCommit?: string;
   contentItemId?: string;
   purpose?: "social post" | "website" | "other";
 };
 
 const CONTENT_TYPES = new Set(["post", "reel", "story", "article"]);
+
+// The mechanic's repair channel. The allowlist is deliberately tiny —
+// restart the worker process, fast-forward it to the latest main, or roll
+// it back to a known-good commit — and every layer re-validates it
+// (proposal parsing here, the approval payload, execution below, and the
+// worker again before it acts). Repairs execute on the worker host itself,
+// never through Codex: the failures they fix are the ones where Codex
+// cannot start.
+type WorkerRepairAction = "restart_worker" | "update_worker" | "rollback_worker";
+const WORKER_REPAIR_ACTIONS = new Set<WorkerRepairAction>(["restart_worker", "update_worker", "rollback_worker"]);
+const WORKER_REPAIR_COMMIT_PATTERN = /^[0-9a-f]{7,40}$/;
+
+function isWorkerRepairAction(value: unknown): value is WorkerRepairAction {
+  return typeof value === "string" && WORKER_REPAIR_ACTIONS.has(value as WorkerRepairAction);
+}
+
+function workerRepairLabel(action: WorkerRepairAction, commit?: string | null): string {
+  switch (action) {
+    case "restart_worker": return "Restart the Codex worker";
+    case "update_worker": return "Update the Codex worker to the latest main";
+    case "rollback_worker": return `Roll the Codex worker back to ${commit ?? "a previous commit"}`;
+  }
+}
 
 function boundedDate(value: unknown): string {
   if (typeof value !== "string") return "";
@@ -965,6 +990,80 @@ const generateImageTool: AgentTool = {
   },
 };
 
+const repairWorkerTool: AgentTool = {
+  actionType: "repair_worker",
+  permission: "request_worker_repair",
+  parseProposal(value) {
+    const reason = boundedText(value.reason, 500);
+    const action = isWorkerRepairAction(value.action) ? value.action : undefined;
+    if (value.type !== "repair_worker" || !reason || reason.length < 8 || !action) return null;
+    if (action === "rollback_worker") {
+      const commit = typeof value.commit === "string" ? value.commit.trim().toLowerCase() : "";
+      if (!WORKER_REPAIR_COMMIT_PATTERN.test(commit)) return null;
+      return { reason, workerRepairAction: action, workerRepairCommit: commit };
+    }
+    return { reason, workerRepairAction: action };
+  },
+  approvalPayload(value) {
+    return {
+      action: value.workerRepairAction,
+      commit: value.workerRepairAction === "rollback_worker" ? value.workerRepairCommit ?? null : null,
+    };
+  },
+  approvalLabel(value) {
+    return value.workerRepairAction
+      ? workerRepairLabel(value.workerRepairAction, value.workerRepairCommit)
+      : "Repair the Codex worker";
+  },
+  async execute(client, projectId, agentId, rawPayload, runId) {
+    const payload = rawPayload && typeof rawPayload === "object" ? rawPayload as Record<string, unknown> : {};
+    // Defense in depth: the allowlist is re-validated at execution time,
+    // not just when the proposal was recorded.
+    const action = isWorkerRepairAction(payload.action) ? payload.action : undefined;
+    const commit = typeof payload.commit === "string" ? payload.commit.trim().toLowerCase() : "";
+    if (!action || !agentId) throw new Error("The approved worker repair payload is invalid.");
+    if (action === "rollback_worker" && !WORKER_REPAIR_COMMIT_PATTERN.test(commit)) {
+      throw new Error("The approved worker rollback payload is invalid.");
+    }
+    // Nothing is repaired here: the repair happens on the worker host,
+    // executed by the worker process itself (never through Codex).
+    // Approval queues a normal execution task for the same agent; the
+    // queued run's input carries the worker_repair spec the worker reads.
+    // There is deliberately no originating-run assignment guard: mechanic
+    // approvals are created by the owner's own diagnosis request rather
+    // than by an agent run, and the approval route has already re-checked
+    // that this agent still holds request_worker_repair.
+    const label = workerRepairLabel(action, action === "rollback_worker" ? commit : null);
+    const title = boundedText(label, 200);
+    const result = await client.query<{ id: string }>(
+      `INSERT INTO tasks (project_id,agent_id,title,priority,status) VALUES ($1,$2,$3,'high','todo') RETURNING id`,
+      [projectId, agentId, title],
+    );
+    const taskId = result.rows[0].id;
+    await queueTaskExecution(client, {
+      projectId,
+      agentId,
+      taskId,
+      title,
+      priority: "high",
+      source: "owner_approved_worker_repair",
+      inputExtras: {
+        worker_repair: {
+          action,
+          commit: action === "rollback_worker" ? commit : null,
+          requested_by_run_id: runId || null,
+        },
+      },
+    });
+    await client.query(
+      `INSERT INTO events (source,event_type,title,severity,project_id,payload)
+       VALUES ('mechanic','worker_repair_queued','Worker repair queued for the Codex worker','info',$1,$2::jsonb)`,
+      [projectId, JSON.stringify({ task_id: taskId, action, commit: action === "rollback_worker" ? commit : null, agent_run_id: runId || null, agent_id: agentId })],
+    );
+    return taskId;
+  },
+};
+
 const registry = new Map<string, AgentTool>([
   [generateImageTool.actionType, generateImageTool],
   [createContentItemTool.actionType, createContentItemTool],
@@ -981,6 +1080,7 @@ const registry = new Map<string, AgentTool>([
   [updateWordPressSettingsTool.actionType, updateWordPressSettingsTool],
   [updateWordPressMenuTool.actionType, updateWordPressMenuTool],
   [manageProxmoxContainerTool.actionType, manageProxmoxContainerTool],
+  [repairWorkerTool.actionType, repairWorkerTool],
 ]);
 
 export function getAgentTool(actionType: unknown) {

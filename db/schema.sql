@@ -409,6 +409,8 @@ WHERE LOWER(name)='marketing' AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? '
 -- action allowlist: destructive operations do not exist in the tool.
 UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_proxmox_manage"]'::jsonb
 WHERE LOWER(name)='devops' AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_proxmox_manage');
+UPDATE agents SET allowed_actions=COALESCE(allowed_actions,'[]'::jsonb) || '["request_worker_repair"]'::jsonb
+WHERE LOWER(name)='devops' AND NOT (COALESCE(allowed_actions,'[]'::jsonb) ? 'request_worker_repair');
 
 -- Allow every agent to propose image generation (image-generation bridge
 -- pack): the agent proposes an image prompt, the owner approves it, and a

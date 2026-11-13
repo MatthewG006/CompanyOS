@@ -39,7 +39,7 @@ test("worker heartbeat carries the self-check and degrades when it fails", async
 test("worker claim loop gates on the self-check and the circuit breaker re-arms it", async () => {
   const worker = await readRepoFile("scripts/agent-worker.mjs");
   assert.ok(worker.includes("const mayClaim = !workerSelfCheck || workerSelfCheck.self_check_ok;"), "claim gate is missing");
-  assert.ok(worker.includes("AND $1::boolean"), "the claim query must apply the gate");
+  assert.ok(worker.includes("($1::boolean OR"), "the claim query must apply the gate (with the worker_repair exemption)");
   assert.ok(worker.includes("[mayClaim]"), "the claim query must receive the gate value");
   assert.ok(
     worker.includes("if (CODEX_CONFIG_ERROR_SIGNATURE.test(stderr)) codexConfigSuspect = true;"),
