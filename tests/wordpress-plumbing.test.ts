@@ -127,6 +127,13 @@ test("runs for WordPress-managing agents are queued with current page context", 
   // Full pages, not excerpts: an excerpted page cannot be edited
   // faithfully, so the cap covers a whole real page body.
   assert.match(context, /MAX_PAGE_CONTENT_CHARS = 12_000/);
+  // Explicit page ids are authoritative: slug substring matching is
+  // only a fallback, so ordinary words ("landing page") cannot pull
+  // an unrelated short-slug page into a run that names its target by
+  // id — the failure behind the declined HOA-images run.
+  assert.match(context, /export function resolveTargetedPageIds/);
+  assert.match(context, /if \(explicitIds\.length\) return \{ explicitIds, slugIds: \[\] \}/);
+  assert.match(context, /const \{ slugIds \} = resolveTargetedPageIds\(title, pages\)/);
 });
 
 test("the prompt teaches template, scoped style, contrast, and image expectations", () => {
