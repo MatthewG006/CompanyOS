@@ -11,8 +11,9 @@ import { getWordPressPageContent, listWordPressPageIndex } from "@/lib/integrati
  * credentials) now snapshots the page index and, for the pages the
  * task actually names, their current stored content, and the prompt
  * builder carries it as bounded memory. Deterministic matching only:
- * an explicit page id in the task title, or the page's slug appearing
- * in the title. At most two pages' content ride along, each capped,
+ * an explicit page id in the task title wins outright; the page's
+ * slug appearing in the title is a fallback for when no id is named.
+ * At most two pages' content ride along, each capped,
  * so the prompt stays bounded.
  */
 
@@ -65,6 +66,26 @@ function slugTargetIds(title: string, pages: Array<{ id: number; slug: string }>
   return ids;
 }
 
+/**
+ * Decide which pages a task targets. An explicit page id in the
+ * title is authoritative: when any candidate id exists in the page
+ * index, slug matching is skipped entirely. Slug matching is a plain
+ * substring test, so ordinary words collide with short slugs — a
+ * title saying "landing page" once pulled the unrelated page with
+ * slug "landing" into a run as a second targeted page, and the agent,
+ * faced with a stranger page's excerpt next to its real target,
+ * declined the task. Slug matching stays as the fallback for tasks
+ * that name a page only by its slug.
+ */
+export function resolveTargetedPageIds(
+  title: string,
+  pages: Array<{ id: number; slug: string }>,
+): { explicitIds: number[]; slugIds: number[] } {
+  const explicitIds = pageIdCandidates(title).filter((id) => pages.some((page) => page.id === id));
+  if (explicitIds.length) return { explicitIds, slugIds: [] };
+  return { explicitIds, slugIds: slugTargetIds(title, pages, []) };
+}
+
 async function loadContext(title: string): Promise<WordPressRunContext | null> {
   // Start the targeted-content fetches for explicitly named page ids
   // at the same time as the index fetch: on this host each request
@@ -100,7 +121,7 @@ async function loadContext(title: string): Promise<WordPressRunContext | null> {
     const pending = candidateContent.get(id);
     if (pending && pages.some((page) => page.id === id)) pushResult(await pending);
   }
-  const slugIds = slugTargetIds(title, pages, targeted.map((page) => page.id));
+  const { slugIds } = resolveTargetedPageIds(title, pages);
   if (slugIds.length) {
     const results = await Promise.allSettled(slugIds.map((id) => getWordPressPageContent(id)));
     for (const result of results) {
