@@ -60,6 +60,7 @@ export function LiveOverview({ initial }: { initial: DashboardData }) {
   usePolling(refresh, 30_000);
 
   return <div className="page-wrap">
+    <AttentionBlock data={data} />
     <DemoBanner source={data.source} />
     <header className="topbar">
       <div>
@@ -105,13 +106,10 @@ export function LiveOverview({ initial }: { initial: DashboardData }) {
       <div className="project-grid">{data.projects.map((project) => <ProjectCard key={project.id} project={project} />)}</div>
     </section>
 
-    <section className="two-col">
-      <AttentionBlock data={data} />
-      <div className="panel">
-        <div className="panel-head"><h2>AI workforce</h2><span>{activeAgents} working</span></div>
-        <div className="agent-grid">{data.agents.map((agent) => <div className="agent-pill" key={agent.id}><StatusDot status={agent.status} /><div><strong>{agent.name}</strong><span>{agent.role} · {agent.open_task_count ?? 0} open tasks</span></div></div>)}</div>
-      </div>
-    </section>
+    <div className="panel">
+      <div className="panel-head"><h2>AI workforce</h2><span>{activeAgents} working</span></div>
+      <div className="agent-grid">{data.agents.map((agent) => <div className="agent-pill" key={agent.id}><StatusDot status={agent.status} /><div><strong>{agent.name}</strong><span>{agent.role} · {agent.open_task_count ?? 0} open tasks</span></div></div>)}</div>
+    </div>
 
     <section className="section-block">
       <div className="section-title-row"><div><h2>Systems & connections</h2><p>What CompanyOS knows about now, and what is ready to connect.</p></div><div className="data-source">CONTROL PLANE</div></div>
