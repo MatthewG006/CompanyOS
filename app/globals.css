@@ -103,6 +103,10 @@ button, input { font: inherit; }
 .status-dot.neutral { background: #7a869e; }
 
 .priority-badge { min-width: 60px; padding: 5px 7px; border-radius: 7px; text-align: center; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; background: rgba(65,150,179,.14); color: #27667c; }
+/* The badge must never flex-shrink: .list-item > div { min-width: 0 } above would
+   otherwise let a long title squeeze the badge below its label width, and the
+   title then paints over the badge text (seen on mobile task lists). */
+.list-item > .priority-badge { flex: none; min-width: 60px; }
 .priority-badge.high { background: rgba(246,196,83,.12); color: #9a7414; }
 .priority-badge.critical { background: rgba(240,109,120,.14); color: #c2434f; }
 
@@ -188,7 +192,7 @@ button, input { font: inherit; }
 
 @media (max-width: 1000px) {
   .app-shell { grid-template-columns: 1fr; }
-  .sidebar { position: sticky; top: 0; z-index: 5; padding: 12px 16px; flex-direction: row; align-items: center; border-right: 0; border-bottom: 1px solid var(--border); }
+  .sidebar { position: sticky; top: 0; z-index: 5; padding: 12px 16px; flex-direction: row; align-items: center; border-right: 0; border-bottom: 1px solid var(--border); background: rgb(5, 22, 28); }
   .sidebar nav { display: flex; overflow-x: auto; }
   .sidebar-footer { display: none; }
   .brand-block { min-width: 150px; }
