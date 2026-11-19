@@ -145,3 +145,55 @@ test("the prompt teaches template, scoped style, contrast, and image expectation
   assert.match(router, /white-on-white text invisible/);
   assert.match(router, /\\?"template\\?":"elementor_header_footer"/);
 });
+
+test("client lists menus with id, name, slug and locations", async () => {
+  const { fetchFn, calls } = mockFetch(() => ({
+    body: [
+      { id: 3, name: "Main Menu", slug: "main-menu", locations: ["main-menu"] },
+      { id: 4, name: "Secondary Menu", slug: "secondary-menu", locations: [] },
+    ],
+  }));
+  const client = createWordPressClient(credentials, fetchFn);
+  const menus = await client.listMenus();
+  assert.equal(calls[0].url, "https://www.example-site.com/wp-json/wp/v2/menus?context=edit&per_page=100");
+  assert.equal(menus[0].id, 3);
+  assert.equal(menus[0].name, "Main Menu");
+  assert.equal(menus[0].slug, "main-menu");
+  assert.deepEqual(menus[0].locations, ["main-menu"]);
+  assert.equal(menus[1].id, 4);
+});
+
+test("client lists a menu's items in menu order", async () => {
+  const { fetchFn, calls } = mockFetch(() => ({
+    body: [
+      { id: 22, title: { rendered: "Contact" }, url: "https://www.example-site.com/contact-2/", parent: 0, menu_order: 2 },
+      { id: 21, title: { rendered: "Home" }, url: "https://www.example-site.com/", parent: 0, menu_order: 1 },
+    ],
+  }));
+  const client = createWordPressClient(credentials, fetchFn);
+  const items = await client.listMenuItems(3);
+  assert.equal(calls[0].url, "https://www.example-site.com/wp-json/wp/v2/menu-items?context=edit&menus=3&per_page=100");
+  assert.equal(items[0].title, "Home");
+  assert.equal(items[0].order, 1);
+  assert.equal(items[1].title, "Contact");
+  assert.equal(items[1].order, 2);
+});
+
+test("runs for WordPress-managing agents are queued with current menu context", () => {
+  const adapter = read("../lib/integrations/wordpress.ts");
+  assert.match(adapter, /export async function listWordPressMenus/);
+  assert.match(adapter, /export async function listWordPressMenuItems/);
+  const context = read("../lib/ai/wordpress-context.ts");
+  assert.match(context, /listWordPressMenus\(\)/);
+  assert.match(context, /listWordPressMenuItems\(/);
+  assert.match(context, /menu_items/);
+  // Items load only when the task is about a menu, so page tasks pay
+  // just the one cheap menu-index call.
+  assert.match(context, /title\.toLowerCase\(\)\.includes\("menu"\)/);
+  // One unreadable menu must not sink the whole context.
+  assert.match(context, /Promise\.allSettled\(menuIndex\.map/);
+  const router = read("../lib/ai/router.ts");
+  assert.match(router, /Current WordPress menus \(from the live site/);
+  assert.match(router, /menu_id" from the Current WordPress menus section above/);
+  assert.match(router, /for menus, use the menu_id shown in the menus section/);
+});

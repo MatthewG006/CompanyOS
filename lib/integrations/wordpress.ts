@@ -4,13 +4,15 @@ import {
   createWordPressClient,
   type WordPressCredentials,
   type WordPressMedia,
+  type WordPressMenu,
+  type WordPressMenuItem,
   type WordPressPage,
   type WordPressSettingsUpdate,
   type WordPressSiteProfile,
 } from "./wordpress-client";
 
 export type { WordPressCredentials } from "./wordpress-client";
-export type { WordPressMedia, WordPressPage, WordPressSettingsUpdate, WordPressSiteProfile } from "./wordpress-client";
+export type { WordPressMedia, WordPressMenu, WordPressMenuItem, WordPressPage, WordPressSettingsUpdate, WordPressSiteProfile } from "./wordpress-client";
 
 export async function getWordPressCredentials(): Promise<WordPressCredentials | null> {
   const envUrl = process.env.WORDPRESS_URL;
@@ -153,6 +155,18 @@ export async function listWordPressPageIndex(): Promise<WordPressPage[]> {
 export async function getWordPressPageContent(pageId: number): Promise<{ page: WordPressPage; content: string }> {
   const client = await wordpressClient();
   return client.getPageContent(pageId);
+}
+
+/** Menu index (id, name, slug, locations) for run-context loading. */
+export async function listWordPressMenus(): Promise<WordPressMenu[]> {
+  const client = await wordpressClient();
+  return client.listMenus();
+}
+
+/** One menu's current items, for an agent replacing rather than guessing. */
+export async function listWordPressMenuItems(menuId: number): Promise<WordPressMenuItem[]> {
+  const client = await wordpressClient();
+  return client.listMenuItems(menuId);
 }
 
 /** Download an approved public source URL into the WordPress media library. */
