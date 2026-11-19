@@ -21,7 +21,7 @@ function formatMoney(cents: number) {
 
 function AttentionBlock({ data }: { data: DashboardData }) {
   const warnings = data.events.filter((event) => event.severity !== "info");
-  return <div className="panel">
+  return <div className="panel section-gap">
     <div className="panel-head"><h2>Owner approvals</h2><span>{data.approvals.length} pending</span></div>
     <ApprovalList initial={data.approvals} />
     {warnings.length ? <div className="subsection"><div className="subsection-title">Warnings</div><div className="list-stack">
