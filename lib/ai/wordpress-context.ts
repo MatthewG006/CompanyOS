@@ -1,4 +1,4 @@
-import { getWordPressPageContent, listWordPressPageIndex } from "@/lib/integrations/wordpress";
+import { getWordPressPageContent, listWordPressMenus, listWordPressMenuItems, listWordPressPageIndex } from "@/lib/integrations/wordpress";
 
 /**
  * WordPress run context for agents holding request_wordpress_manage.
@@ -15,6 +15,14 @@ import { getWordPressPageContent, listWordPressPageIndex } from "@/lib/integrati
  * slug appearing in the title is a fallback for when no id is named.
  * At most two pages' content ride along, each capped,
  * so the prompt stays bounded.
+ *
+ * Menus ride along the same way: a menu task needs the menu's numeric
+ * id and its current items, and update_wordpress_menu has no slug
+ * fallback — without them the agent must decline rather than guess,
+ * which is exactly what happened to the 2026-11-19 menu rebuild
+ * (declined twice). The menu index loads on every managed run; the
+ * current items load only when the task mentions a menu, so page
+ * tasks pay one extra cheap call and nothing more.
  */
 
 const MAX_TARGETED_PAGES = 2;
@@ -40,6 +48,11 @@ export type WordPressRunContext = {
     template: string;
     content: string;
     content_truncated: boolean;
+  }>;
+  menus: Array<{ id: number; name: string; slug: string; locations: string[] }>;
+  menu_items: Array<{
+    menu_id: number;
+    items: Array<{ id: number; title: string; url: string; parent: number; order: number }>;
   }>;
 };
 
@@ -95,8 +108,18 @@ async function loadContext(title: string): Promise<WordPressRunContext | null> {
   const candidateContent = new Map(
     candidates.map((id) => [id, getWordPressPageContent(id).then((result) => result, () => null)] as const),
   );
+  // The menu index rides the same parallel fetch: one cheap call,
+  // and a menu task cannot propose without the numeric menu id.
+  const menusPromise = listWordPressMenus().then((menus) => menus, () => null);
   const pages = await listWordPressPageIndex();
-  if (!pages.length) return null;
+  const menus = await menusPromise;
+  const menuIndex = (menus ?? []).map((menu) => ({
+    id: menu.id,
+    name: menu.name,
+    slug: menu.slug,
+    locations: menu.locations,
+  }));
+  if (!pages.length && !menuIndex.length) return null;
   const index = pages.map((page) => ({
     id: page.id,
     slug: page.slug,
@@ -128,7 +151,28 @@ async function loadContext(title: string): Promise<WordPressRunContext | null> {
       if (result.status === "fulfilled") pushResult(result.value); // One unreadable page must not sink the whole context.
     }
   }
-  return { pages: index, targeted_pages: targeted };
+  // Menu items only when the task is about a menu: a page task has
+  // no use for them, and each menu costs one more slow-host call.
+  // One unreadable menu must not sink the whole context.
+  const menuItems: WordPressRunContext["menu_items"] = [];
+  if (title.toLowerCase().includes("menu") && menuIndex.length) {
+    const itemResults = await Promise.allSettled(menuIndex.map((menu) => listWordPressMenuItems(menu.id)));
+    for (const [index, result] of itemResults.entries()) {
+      if (result.status === "fulfilled") {
+        menuItems.push({
+          menu_id: menuIndex[index].id,
+          items: result.value.map((item) => ({
+            id: item.id,
+            title: item.title,
+            url: item.url,
+            parent: item.parent,
+            order: item.order,
+          })),
+        });
+      }
+    }
+  }
+  return { pages: index, targeted_pages: targeted, menus: menuIndex, menu_items: menuItems };
 }
 
 /**
