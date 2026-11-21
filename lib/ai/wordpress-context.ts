@@ -31,7 +31,11 @@ const MAX_TARGETED_PAGES = 2;
 // refused to "preserve" wording it could not see). The prompt
 // builder carries targeted contents in a dedicated section with its
 // own budget instead of the 6,000-char shared memory slice.
-const MAX_PAGE_CONTENT_CHARS = 12_000;
+// Raised 12,000 -> 24,000 on 2026-11-21: the homepage body reached
+// 14,907 chars, so a link edit was declined because the supplied
+// content was truncated mid-section. Keep the prompt builder's
+// slice in lib/ai/router.ts at the same value.
+const MAX_PAGE_CONTENT_CHARS = 24_000;
 // The WordPress host can take 5-10 s to answer on a cold connection
 // (measured live 2026-11-13); an 8 s budget silently starved the
 // first plumbing test run of its context. The lean _fields index
