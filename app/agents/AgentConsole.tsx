@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ExpandableText } from "@/components/ExpandableText";
 import { ListSearch, matchesQuery } from "@/components/ListSearch";
 import { usePolling } from "@/components/usePolling";
 import { AdminTokenField, useAdminToken } from "@/components/AdminToken";
@@ -190,7 +191,7 @@ export function AgentConsole({ tasks, source }: { tasks: Task[]; source: "databa
               <div className="task-board-main">
                 <div className="task-board-title">
                   <span className={`priority-badge ${task.priority}`}>{task.priority}</span>
-                  <strong>{task.title}</strong>
+                  <strong><ExpandableText text={task.title} /></strong>
                 </div>
                 <div className="muted task-board-meta">
                   {task.project_name ?? "Company-wide"} · Assigned: {task.agent_name ?? "Unassigned"} · Status: {task.status}
