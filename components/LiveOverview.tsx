@@ -7,6 +7,7 @@ import { ApprovalList } from "./ApprovalList";
 import { AskCompanyOS } from "./AskCompanyOS";
 import { MechanicPanel } from "./MechanicPanel";
 import { DemoBanner } from "./DemoBanner";
+import { ExpandableText } from "./ExpandableText";
 import { MetricCard } from "./MetricCard";
 import { ProjectCard } from "./ProjectCard";
 import { StatusDot } from "./StatusDot";
@@ -123,7 +124,7 @@ export function LiveOverview({ initial }: { initial: DashboardData }) {
       </div>
       <div className="panel">
         <div className="panel-head"><h2>Priority tasks</h2><span>{openTasks} open</span></div>
-        <div className="list-stack">{data.tasks.slice(0, 10).map((task) => <div className="list-item" key={task.id}><div className={`priority-badge ${task.priority}`}>{task.priority}</div><div><strong>{task.title}</strong><div className="muted">{task.project_name ?? "Company"} · {task.agent_name ?? "Unassigned"} · {task.status.replaceAll("_", " ")}</div></div></div>)}</div>
+        <div className="list-stack">{data.tasks.slice(0, 10).map((task) => <div className="list-item" key={task.id}><div className={`priority-badge ${task.priority}`}>{task.priority}</div><div className="task-list-main"><strong><ExpandableText text={task.title} /></strong><div className="muted">{task.project_name ?? "Company"} · {task.agent_name ?? "Unassigned"} · {task.status.replaceAll("_", " ")}</div></div></div>)}</div>
       </div>
     </section>
 
