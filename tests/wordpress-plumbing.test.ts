@@ -126,7 +126,7 @@ test("runs for WordPress-managing agents are queued with current page context", 
   assert.match(context, /CONTEXT_TIMEOUT_MS = 20_000/);
   // Full pages, not excerpts: an excerpted page cannot be edited
   // faithfully, so the cap covers a whole real page body.
-  assert.match(context, /MAX_PAGE_CONTENT_CHARS = 12_000/);
+  assert.match(context, /MAX_PAGE_CONTENT_CHARS = 24_000/);
   // Explicit page ids are authoritative: slug substring matching is
   // only a fallback, so ordinary words ("landing page") cannot pull
   // an unrelated short-slug page into a run that names its target by
