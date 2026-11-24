@@ -10,6 +10,7 @@ import {
   INTAKE_SECRET_HEADER,
   intakeAuthStatus,
   parseLeadIntake,
+  queryFieldMap,
   queryIntakeSecret,
 } from "@/lib/sales/intake";
 
@@ -23,7 +24,11 @@ export const dynamic = "force-dynamic";
  * x-intake-secret header, as a `secret` field in the JSON body, or as a
  * `key` query parameter on the URL (the free AFI plugin can set neither
  * custom headers nor custom fields, but the destination URL is always
- * editable). The proxy allowlists this path for that reason; the
+ * editable). The URL may also carry `name_key` / `email_key` /
+ * `message_key` parameters naming which body keys hold those fields,
+ * because the free AFI webhook posts Hash Form's internal field keys
+ * (field_…) rather than the field names. The proxy allowlists this path
+ * for that reason; the
  * secret check below is the authentication. A submission becomes a
  * contact, a stage 'new' sales lead for Sky Mountain Graphics, an owner
  * attention item, and a sales-pipeline event — the same records the
@@ -44,7 +49,7 @@ export async function POST(request: Request) {
   if (!(await databaseAvailable())) return databaseUnavailable();
 
   try {
-    const parsed = parseLeadIntake(body);
+    const parsed = parseLeadIntake(body, queryFieldMap(request.url));
     if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
     const lead = parsed.lead;
     const opportunityTitle = buildOpportunityTitle(lead.service);

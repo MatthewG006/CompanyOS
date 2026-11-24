@@ -38,10 +38,12 @@ export type LeadIntake = {
 export type LeadIntakeParse = { ok: true; lead: LeadIntake } | { ok: false; error: string };
 
 /**
- * Field-name aliases, matched case-insensitively. The free AFI webhook
- * sends the Hash Form field labels as its JSON keys ("Name", "Email",
- * "Message"), not the canonical lowercase names, so the parser accepts
- * the labels and the common variants a mapping might use.
+ * Field-name aliases, matched case-insensitively. Senders that post the
+ * form's field labels as their JSON keys ("Name", "Email", "Message")
+ * are accepted alongside the canonical lowercase names and the common
+ * variants a mapping might use. (The free AFI webhook sends neither —
+ * it posts Hash Form's internal field keys, which the URL field map
+ * below handles instead.)
  */
 const FIELD_ALIASES: Record<string, string[]> = {
   name: ["name", "full_name", "fullname", "your_name", "contact_name"],
@@ -65,17 +67,54 @@ function findField(record: Record<string, unknown>, canonical: string): string {
   return "";
 }
 
+function exactField(record: Record<string, unknown>, key: string | undefined): string {
+  if (!key) return "";
+  const value = record[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export const INTAKE_NAME_KEY_PARAM = "name_key";
+export const INTAKE_EMAIL_KEY_PARAM = "email_key";
+export const INTAKE_MESSAGE_KEY_PARAM = "message_key";
+
+/** Which body keys carry the name, email and message, when the sender names them. */
+export type IntakeFieldMap = { name?: string; email?: string; message?: string };
+
+/**
+ * The field map may ride in the intake URL as `name_key` / `email_key` /
+ * `message_key` parameters: the free AFI webhook posts Hash Form's
+ * internal field keys (e.g. `field_khky7z`), which no fixed alias list
+ * can know, but the destination URL is always editable, so the mapping
+ * travels with the address the plugin posts to.
+ */
+export function queryFieldMap(url: string): IntakeFieldMap {
+  const fieldMap: IntakeFieldMap = { name: undefined, email: undefined, message: undefined };
+  try {
+    const params = new URL(url).searchParams;
+    const pick = (param: string) => {
+      const value = params.get(param);
+      return value && value.length <= 80 ? value : undefined;
+    };
+    fieldMap.name = pick(INTAKE_NAME_KEY_PARAM);
+    fieldMap.email = pick(INTAKE_EMAIL_KEY_PARAM);
+    fieldMap.message = pick(INTAKE_MESSAGE_KEY_PARAM);
+  } catch {
+    // A malformed URL carries no field map; the canonical keys still apply.
+  }
+  return fieldMap;
+}
+
 /** Validate and normalize a raw intake body. Unknown fields are ignored. */
-export function parseLeadIntake(body: unknown): LeadIntakeParse {
+export function parseLeadIntake(body: unknown, fieldMap: IntakeFieldMap = {}): LeadIntakeParse {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return { ok: false, error: "Request body must be a JSON object." };
   }
   const record = body as Record<string, unknown>;
-  const name = findField(record, "name");
-  const email = findField(record, "email").toLowerCase();
+  const name = exactField(record, fieldMap.name) || findField(record, "name");
+  const email = (exactField(record, fieldMap.email) || findField(record, "email")).toLowerCase();
   const phone = findField(record, "phone");
   const service = findField(record, "service");
-  const message = findField(record, "message");
+  const message = exactField(record, fieldMap.message) || findField(record, "message");
   const source = findField(record, "source") || DEFAULT_INTAKE_SOURCE;
 
   if (!name) return { ok: false, error: "A contact name is required." };
