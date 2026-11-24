@@ -13,6 +13,7 @@ import { timingSafeEqual } from "node:crypto";
 export const GRAPHICS_PROJECT_SLUG = "sky-mountain-graphics";
 export const INTAKE_SECRET_HEADER = "x-intake-secret";
 export const INTAKE_SECRET_FIELD = "secret";
+export const INTAKE_SECRET_PARAM = "key";
 export const DEFAULT_INTAKE_SOURCE = "website";
 
 const NAME_MAX = 160;
@@ -94,6 +95,22 @@ export function bodyIntakeSecret(body: unknown): string | null {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
   const value = (body as Record<string, unknown>)[INTAKE_SECRET_FIELD];
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * The shared secret may also arrive as a `key` query parameter on the
+ * intake URL: the free Advanced Form Integration webhook cannot add
+ * custom fields or headers at all, but the destination URL is always
+ * editable, so the secret rides in the URL the plugin posts to (the
+ * Zapier-hook pattern). Header and body field win when both are sent.
+ */
+export function queryIntakeSecret(url: string): string | null {
+  try {
+    const value = new URL(url).searchParams.get(INTAKE_SECRET_PARAM);
+    return value && value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 export type IntakeAuthStatus = "unconfigured" | "unauthorized" | "ok";
