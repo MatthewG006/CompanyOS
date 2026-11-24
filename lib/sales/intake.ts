@@ -37,8 +37,32 @@ export type LeadIntake = {
 
 export type LeadIntakeParse = { ok: true; lead: LeadIntake } | { ok: false; error: string };
 
-function boundedField(body: Record<string, unknown>, key: string) {
-  return typeof body[key] === "string" ? (body[key] as string).trim() : "";
+/**
+ * Field-name aliases, matched case-insensitively. The free AFI webhook
+ * sends the Hash Form field labels as its JSON keys ("Name", "Email",
+ * "Message"), not the canonical lowercase names, so the parser accepts
+ * the labels and the common variants a mapping might use.
+ */
+const FIELD_ALIASES: Record<string, string[]> = {
+  name: ["name", "full_name", "fullname", "your_name", "contact_name"],
+  email: ["email", "email_address", "your_email"],
+  phone: ["phone", "phone_number", "your_phone", "telephone"],
+  service: ["service", "your_service"],
+  message: ["message", "your_message", "comments"],
+  source: ["source"],
+};
+
+function findField(record: Record<string, unknown>, canonical: string): string {
+  const byLowerKey = new Map<string, unknown>();
+  for (const [key, value] of Object.entries(record)) {
+    const lower = key.toLowerCase();
+    if (!byLowerKey.has(lower)) byLowerKey.set(lower, value);
+  }
+  for (const alias of FIELD_ALIASES[canonical] ?? [canonical]) {
+    const value = byLowerKey.get(alias);
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
 }
 
 /** Validate and normalize a raw intake body. Unknown fields are ignored. */
@@ -47,12 +71,12 @@ export function parseLeadIntake(body: unknown): LeadIntakeParse {
     return { ok: false, error: "Request body must be a JSON object." };
   }
   const record = body as Record<string, unknown>;
-  const name = boundedField(record, "name");
-  const email = boundedField(record, "email").toLowerCase();
-  const phone = boundedField(record, "phone");
-  const service = boundedField(record, "service");
-  const message = boundedField(record, "message");
-  const source = boundedField(record, "source") || DEFAULT_INTAKE_SOURCE;
+  const name = findField(record, "name");
+  const email = findField(record, "email").toLowerCase();
+  const phone = findField(record, "phone");
+  const service = findField(record, "service");
+  const message = findField(record, "message");
+  const source = findField(record, "source") || DEFAULT_INTAKE_SOURCE;
 
   if (!name) return { ok: false, error: "A contact name is required." };
   if (name.length > NAME_MAX) return { ok: false, error: `Name must be ${NAME_MAX} characters or fewer.` };

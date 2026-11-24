@@ -58,6 +58,32 @@ test("intake validation rejects malformed email and overlong fields", () => {
   assert.equal(parseLeadIntake({ name: "Ada", email: "ada@example.com", source: "s".repeat(61) }).ok, false);
 });
 
+test("intake validation accepts the form labels AFI sends, in any capitalization", () => {
+  const parsed = parseLeadIntake({ Name: "Ada Lovelace", Email: "ADA@Example.COM", Message: "Hello there." });
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.lead.name, "Ada Lovelace");
+  assert.equal(parsed.lead.email, "ada@example.com");
+  assert.equal(parsed.lead.message, "Hello there.");
+});
+
+test("intake validation accepts common field aliases", () => {
+  const parsed = parseLeadIntake({
+    full_name: "Sam Reyes",
+    email_address: "sam@example.com",
+    your_message: "Please send a quote.",
+  });
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.lead.name, "Sam Reyes");
+  assert.equal(parsed.lead.email, "sam@example.com");
+  assert.equal(parsed.lead.message, "Please send a quote.");
+  // The canonical key still wins over an alias when both are present.
+  const both = parseLeadIntake({ name: "Canonical", full_name: "Alias", email: "ada@example.com" });
+  assert.equal(both.ok, true);
+  if (both.ok) assert.equal(both.lead.name, "Canonical");
+});
+
 test("intake validation rejects non-object bodies", () => {
   assert.equal(parseLeadIntake(null).ok, false);
   assert.equal(parseLeadIntake("name").ok, false);
