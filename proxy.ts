@@ -7,6 +7,7 @@ const publicPaths = new Set([
   "/api/health",
   "/api/integrations/google/callback",
   "/api/events/ingest",
+  "/api/leads/intake",
 ]);
 const internalAuthHeader = "x-companyos-owner-authenticated";
 
