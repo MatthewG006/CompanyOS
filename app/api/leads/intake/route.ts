@@ -10,6 +10,7 @@ import {
   INTAKE_SECRET_HEADER,
   intakeAuthStatus,
   parseLeadIntake,
+  queryIntakeSecret,
 } from "@/lib/sales/intake";
 
 export const dynamic = "force-dynamic";
@@ -19,9 +20,10 @@ export const dynamic = "force-dynamic";
  *
  * WordPress (Hash Form, forwarded by the Advanced Form Integration plugin)
  * posts each form submission here with the shared secret — in the
- * x-intake-secret header, or as a `secret` field in the JSON body (the
- * free AFI plugin cannot set custom headers, so it maps the secret into
- * the payload). The proxy allowlists this path for that reason; the
+ * x-intake-secret header, as a `secret` field in the JSON body, or as a
+ * `key` query parameter on the URL (the free AFI plugin can set neither
+ * custom headers nor custom fields, but the destination URL is always
+ * editable). The proxy allowlists this path for that reason; the
  * secret check below is the authentication. A submission becomes a
  * contact, a stage 'new' sales lead for Sky Mountain Graphics, an owner
  * attention item, and a sales-pipeline event — the same records the
@@ -34,7 +36,8 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
   }
-  const providedSecret = request.headers.get(INTAKE_SECRET_HEADER) ?? bodyIntakeSecret(body);
+  const providedSecret =
+    request.headers.get(INTAKE_SECRET_HEADER) ?? bodyIntakeSecret(body) ?? queryIntakeSecret(request.url);
   const auth = intakeAuthStatus(providedSecret, process.env.LEAD_INTAKE_SECRET);
   if (auth === "unconfigured") return apiError("Lead intake is not configured.", 503);
   if (auth === "unauthorized") return NextResponse.json({ error: "Unauthorized." }, { status: 401 });

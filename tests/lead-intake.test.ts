@@ -7,8 +7,10 @@ import {
   buildOpportunityTitle,
   GRAPHICS_PROJECT_SLUG,
   INTAKE_SECRET_FIELD,
+  INTAKE_SECRET_PARAM,
   intakeAuthStatus,
   parseLeadIntake,
+  queryIntakeSecret,
 } from "../lib/sales/intake.ts";
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -121,10 +123,28 @@ test("the body secret field carries the shared secret when no header can be set"
   assert.equal(parseLeadIntake({ name: "Ada", email: "ada@example.com", secret: "s3cret-value" }).ok, true);
 });
 
+test("the URL key parameter carries the shared secret when neither header nor field can be set", () => {
+  assert.equal(INTAKE_SECRET_PARAM, "key");
+  assert.equal(queryIntakeSecret("https://example.com/api/leads/intake?key=s3cret-value"), "s3cret-value");
+  assert.equal(queryIntakeSecret("https://example.com/api/leads/intake?other=1&key=s3cret-value"), "s3cret-value");
+  assert.equal(queryIntakeSecret("https://example.com/api/leads/intake"), null);
+  assert.equal(queryIntakeSecret("https://example.com/api/leads/intake?key="), null);
+  assert.equal(queryIntakeSecret("not a url"), null);
+  // A URL key authenticates exactly like the header value.
+  assert.equal(
+    intakeAuthStatus(queryIntakeSecret("https://example.com/api/leads/intake?key=s3cret-value"), "s3cret-value"),
+    "ok",
+  );
+  assert.equal(
+    intakeAuthStatus(queryIntakeSecret("https://example.com/api/leads/intake?key=wrong"), "s3cret-value"),
+    "unauthorized",
+  );
+});
+
 test("the intake route enforces the secret before touching the database", () => {
   const route = read("../app/api/leads/intake/route.ts");
   assert.match(route, /LEAD_INTAKE_SECRET/);
-  assert.match(route, /request\.headers\.get\(INTAKE_SECRET_HEADER\) \?\? bodyIntakeSecret\(body\)/);
+  assert.match(route, /request\.headers\.get\(INTAKE_SECRET_HEADER\) \?\? bodyIntakeSecret\(body\) \?\? queryIntakeSecret\(request\.url\)/);
   assert.match(route, /auth === "unconfigured"\) return apiError\("Lead intake is not configured\.", 503\)/);
   assert.match(route, /auth === "unauthorized"\) return NextResponse\.json\(\{ error: "Unauthorized\." \}, \{ status: 401 \}\)/);
   assert.ok(
