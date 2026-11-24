@@ -3,15 +3,16 @@ import { timingSafeEqual } from "node:crypto";
 /**
  * Website lead intake: the pure half of POST /api/leads/intake.
  *
- * The public Sky Mountain Graphics site (WordPress + Contact Form 7) will
- * forward each form submission to CompanyOS through a webhook plugin. These
- * helpers validate and shape that payload and check the shared secret, so
- * the route handler itself only does database work. Nothing here logs or
- * returns the secret.
+ * The public Sky Mountain Graphics site (WordPress + Hash Form) forwards
+ * each form submission to CompanyOS through the Advanced Form Integration
+ * plugin. These helpers validate and shape that payload and check the
+ * shared secret, so the route handler itself only does database work.
+ * Nothing here logs or returns the secret.
  */
 
 export const GRAPHICS_PROJECT_SLUG = "sky-mountain-graphics";
 export const INTAKE_SECRET_HEADER = "x-intake-secret";
+export const INTAKE_SECRET_FIELD = "secret";
 export const DEFAULT_INTAKE_SOURCE = "website";
 
 const NAME_MAX = 160;
@@ -81,6 +82,18 @@ export function buildLeadNotes(lead: LeadIntake) {
   if (lead.service) lines.push(`Service: ${lead.service}`);
   if (lead.message) lines.push("", lead.message);
   return lines.join("\n").slice(0, 4000);
+}
+
+/**
+ * The shared secret may also arrive as a `secret` field in the JSON body:
+ * the free Advanced Form Integration plugin cannot set custom headers, so
+ * it maps the secret into the payload instead. The header wins when both
+ * are sent. Returns null when no usable body secret is present.
+ */
+export function bodyIntakeSecret(body: unknown): string | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const value = (body as Record<string, unknown>)[INTAKE_SECRET_FIELD];
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 export type IntakeAuthStatus = "unconfigured" | "unauthorized" | "ok";

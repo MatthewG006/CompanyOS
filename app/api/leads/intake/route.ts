@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { apiError, apiErrorFrom, databaseUnavailable } from "@/lib/api-errors";
 import { databaseAvailable, transaction } from "@/lib/db";
 import {
+  bodyIntakeSecret,
   buildLeadNotes,
   buildOpportunityTitle,
   GRAPHICS_PROJECT_SLUG,
@@ -16,26 +17,30 @@ export const dynamic = "force-dynamic";
 /**
  * Public lead intake for the Sky Mountain Graphics website.
  *
- * WordPress (Contact Form 7 plus a webhook plugin) posts each form
- * submission here with the shared secret in the x-intake-secret header.
- * The proxy allowlists this path for that reason; the secret check below
- * is the authentication. A submission becomes a contact, a stage 'new'
- * sales lead for Sky Mountain Graphics, an owner attention item, and a
- * sales-pipeline event — the same records the Sales page creates by hand.
+ * WordPress (Hash Form, forwarded by the Advanced Form Integration plugin)
+ * posts each form submission here with the shared secret — in the
+ * x-intake-secret header, or as a `secret` field in the JSON body (the
+ * free AFI plugin cannot set custom headers, so it maps the secret into
+ * the payload). The proxy allowlists this path for that reason; the
+ * secret check below is the authentication. A submission becomes a
+ * contact, a stage 'new' sales lead for Sky Mountain Graphics, an owner
+ * attention item, and a sales-pipeline event — the same records the
+ * Sales page creates by hand.
  */
 export async function POST(request: Request) {
-  const auth = intakeAuthStatus(request.headers.get(INTAKE_SECRET_HEADER), process.env.LEAD_INTAKE_SECRET);
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
+  }
+  const providedSecret = request.headers.get(INTAKE_SECRET_HEADER) ?? bodyIntakeSecret(body);
+  const auth = intakeAuthStatus(providedSecret, process.env.LEAD_INTAKE_SECRET);
   if (auth === "unconfigured") return apiError("Lead intake is not configured.", 503);
   if (auth === "unauthorized") return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   if (!(await databaseAvailable())) return databaseUnavailable();
 
   try {
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
-    }
     const parsed = parseLeadIntake(body);
     if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
     const lead = parsed.lead;
