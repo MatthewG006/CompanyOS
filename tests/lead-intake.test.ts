@@ -6,10 +6,14 @@ import {
   buildLeadNotes,
   buildOpportunityTitle,
   GRAPHICS_PROJECT_SLUG,
+  INTAKE_EMAIL_KEY_PARAM,
+  INTAKE_MESSAGE_KEY_PARAM,
+  INTAKE_NAME_KEY_PARAM,
   INTAKE_SECRET_FIELD,
   INTAKE_SECRET_PARAM,
   intakeAuthStatus,
   parseLeadIntake,
+  queryFieldMap,
   queryIntakeSecret,
 } from "../lib/sales/intake.ts";
 
@@ -56,6 +60,73 @@ test("intake validation rejects malformed email and overlong fields", () => {
   assert.equal(parseLeadIntake({ name: "Ada", email: "ada@example.com", service: "s".repeat(121) }).ok, false);
   assert.equal(parseLeadIntake({ name: "Ada", email: "ada@example.com", message: "m".repeat(2001) }).ok, false);
   assert.equal(parseLeadIntake({ name: "Ada", email: "ada@example.com", source: "s".repeat(61) }).ok, false);
+});
+
+test("intake validation accepts the form labels AFI sends, in any capitalization", () => {
+  const parsed = parseLeadIntake({ Name: "Ada Lovelace", Email: "ADA@Example.COM", Message: "Hello there." });
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.lead.name, "Ada Lovelace");
+  assert.equal(parsed.lead.email, "ada@example.com");
+  assert.equal(parsed.lead.message, "Hello there.");
+});
+
+test("intake validation accepts common field aliases", () => {
+  const parsed = parseLeadIntake({
+    full_name: "Sam Reyes",
+    email_address: "sam@example.com",
+    your_message: "Please send a quote.",
+  });
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.lead.name, "Sam Reyes");
+  assert.equal(parsed.lead.email, "sam@example.com");
+  assert.equal(parsed.lead.message, "Please send a quote.");
+  // The canonical key still wins over an alias when both are present.
+  const both = parseLeadIntake({ name: "Canonical", full_name: "Alias", email: "ada@example.com" });
+  assert.equal(both.ok, true);
+  if (both.ok) assert.equal(both.lead.name, "Canonical");
+});
+
+test("intake validation reads the fields the URL field map names", () => {
+  // The exact body shape the free AFI webhook posted for the live test
+  // submission: Hash Form's internal field keys, plus its metadata.
+  const body = {
+    field_khky7z: "Test lead",
+    field_whob6c: "Matthew.Gonzalez006@Gmail.com",
+    form_id: 1,
+    form_title: "Contact Form",
+    entry_id: 9,
+  };
+  assert.equal(parseLeadIntake(body).ok, false, "the internal keys are unrecognizable without a map");
+  const parsed = parseLeadIntake(body, { name: "field_khky7z", email: "field_whob6c" });
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.lead.name, "Test lead");
+  assert.equal(parsed.lead.email, "matthew.gonzalez006@gmail.com");
+  // A mapped key wins over a canonical key when both are present.
+  const both = parseLeadIntake(
+    { name: "Canonical", field_khky7z: "Mapped", email: "ada@example.com" },
+    { name: "field_khky7z" },
+  );
+  assert.equal(both.ok, true);
+  if (both.ok) assert.equal(both.lead.name, "Mapped");
+});
+
+test("the URL field map names the body keys AFI posts", () => {
+  assert.equal(INTAKE_NAME_KEY_PARAM, "name_key");
+  assert.equal(INTAKE_EMAIL_KEY_PARAM, "email_key");
+  assert.equal(INTAKE_MESSAGE_KEY_PARAM, "message_key");
+  assert.deepEqual(
+    queryFieldMap("https://example.com/api/leads/intake?key=s3cret&name_key=field_khky7z&email_key=field_whob6c"),
+    { name: "field_khky7z", email: "field_whob6c", message: undefined },
+  );
+  assert.deepEqual(queryFieldMap("https://example.com/api/leads/intake"), {
+    name: undefined,
+    email: undefined,
+    message: undefined,
+  });
+  assert.deepEqual(queryFieldMap("not a url"), { name: undefined, email: undefined, message: undefined });
 });
 
 test("intake validation rejects non-object bodies", () => {
@@ -145,6 +216,7 @@ test("the intake route enforces the secret before touching the database", () => 
   const route = read("../app/api/leads/intake/route.ts");
   assert.match(route, /LEAD_INTAKE_SECRET/);
   assert.match(route, /request\.headers\.get\(INTAKE_SECRET_HEADER\) \?\? bodyIntakeSecret\(body\) \?\? queryIntakeSecret\(request\.url\)/);
+  assert.match(route, /parseLeadIntake\(body, queryFieldMap\(request\.url\)\)/);
   assert.match(route, /auth === "unconfigured"\) return apiError\("Lead intake is not configured\.", 503\)/);
   assert.match(route, /auth === "unauthorized"\) return NextResponse\.json\(\{ error: "Unauthorized\." \}, \{ status: 401 \}\)/);
   assert.ok(

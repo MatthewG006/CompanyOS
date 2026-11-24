@@ -37,22 +37,85 @@ export type LeadIntake = {
 
 export type LeadIntakeParse = { ok: true; lead: LeadIntake } | { ok: false; error: string };
 
-function boundedField(body: Record<string, unknown>, key: string) {
-  return typeof body[key] === "string" ? (body[key] as string).trim() : "";
+/**
+ * Field-name aliases, matched case-insensitively. Senders that post the
+ * form's field labels as their JSON keys ("Name", "Email", "Message")
+ * are accepted alongside the canonical lowercase names and the common
+ * variants a mapping might use. (The free AFI webhook sends neither —
+ * it posts Hash Form's internal field keys, which the URL field map
+ * below handles instead.)
+ */
+const FIELD_ALIASES: Record<string, string[]> = {
+  name: ["name", "full_name", "fullname", "your_name", "contact_name"],
+  email: ["email", "email_address", "your_email"],
+  phone: ["phone", "phone_number", "your_phone", "telephone"],
+  service: ["service", "your_service"],
+  message: ["message", "your_message", "comments"],
+  source: ["source"],
+};
+
+function findField(record: Record<string, unknown>, canonical: string): string {
+  const byLowerKey = new Map<string, unknown>();
+  for (const [key, value] of Object.entries(record)) {
+    const lower = key.toLowerCase();
+    if (!byLowerKey.has(lower)) byLowerKey.set(lower, value);
+  }
+  for (const alias of FIELD_ALIASES[canonical] ?? [canonical]) {
+    const value = byLowerKey.get(alias);
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function exactField(record: Record<string, unknown>, key: string | undefined): string {
+  if (!key) return "";
+  const value = record[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export const INTAKE_NAME_KEY_PARAM = "name_key";
+export const INTAKE_EMAIL_KEY_PARAM = "email_key";
+export const INTAKE_MESSAGE_KEY_PARAM = "message_key";
+
+/** Which body keys carry the name, email and message, when the sender names them. */
+export type IntakeFieldMap = { name?: string; email?: string; message?: string };
+
+/**
+ * The field map may ride in the intake URL as `name_key` / `email_key` /
+ * `message_key` parameters: the free AFI webhook posts Hash Form's
+ * internal field keys (e.g. `field_khky7z`), which no fixed alias list
+ * can know, but the destination URL is always editable, so the mapping
+ * travels with the address the plugin posts to.
+ */
+export function queryFieldMap(url: string): IntakeFieldMap {
+  const fieldMap: IntakeFieldMap = { name: undefined, email: undefined, message: undefined };
+  try {
+    const params = new URL(url).searchParams;
+    const pick = (param: string) => {
+      const value = params.get(param);
+      return value && value.length <= 80 ? value : undefined;
+    };
+    fieldMap.name = pick(INTAKE_NAME_KEY_PARAM);
+    fieldMap.email = pick(INTAKE_EMAIL_KEY_PARAM);
+    fieldMap.message = pick(INTAKE_MESSAGE_KEY_PARAM);
+  } catch {
+    // A malformed URL carries no field map; the canonical keys still apply.
+  }
+  return fieldMap;
 }
 
 /** Validate and normalize a raw intake body. Unknown fields are ignored. */
-export function parseLeadIntake(body: unknown): LeadIntakeParse {
+export function parseLeadIntake(body: unknown, fieldMap: IntakeFieldMap = {}): LeadIntakeParse {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return { ok: false, error: "Request body must be a JSON object." };
   }
   const record = body as Record<string, unknown>;
-  const name = boundedField(record, "name");
-  const email = boundedField(record, "email").toLowerCase();
-  const phone = boundedField(record, "phone");
-  const service = boundedField(record, "service");
-  const message = boundedField(record, "message");
-  const source = boundedField(record, "source") || DEFAULT_INTAKE_SOURCE;
+  const name = exactField(record, fieldMap.name) || findField(record, "name");
+  const email = (exactField(record, fieldMap.email) || findField(record, "email")).toLowerCase();
+  const phone = findField(record, "phone");
+  const service = findField(record, "service");
+  const message = exactField(record, fieldMap.message) || findField(record, "message");
+  const source = findField(record, "source") || DEFAULT_INTAKE_SOURCE;
 
   if (!name) return { ok: false, error: "A contact name is required." };
   if (name.length > NAME_MAX) return { ok: false, error: `Name must be ${NAME_MAX} characters or fewer.` };
